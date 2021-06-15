@@ -1143,10 +1143,10 @@ contract ScholarAidTeamTimelock {
     using SafeMath for uint256;
     
     // Defines the release interval
-    uint8 constant public RELEASE_PERCENTAGE = 10;
+    uint8 constant public RELEASE_PERCENTAGE = 5;
     
     // Defines the release interval
-    uint256 constant public RELEASE_INTERVAL = 30 days;
+    uint256 constant public RELEASE_INTERVAL = 15 days;
     
     uint256 private _nextWidthdraw = block.timestamp;
     
@@ -1183,9 +1183,7 @@ contract ScholarAidTeamTimelock {
      * @notice Transfers tokens held by timelock to beneficiary.
      */
     function release() public virtual {
-        uint256 timestamp = block.timestamp;
-
-        require(timestamp >= _nextWidthdraw,
+        require(block.timestamp >= _nextWidthdraw,
             "TokenTimelock: current time is before release time");
         
         if (_baseTokenAmount == 0)
@@ -1195,7 +1193,7 @@ contract ScholarAidTeamTimelock {
 
         require(amount > 0, "TokenTimelock: no tokens to release");
         
-        _nextWidthdraw = block.timestamp.add(RELEASE_INTERVAL);
+        _nextWidthdraw = _nextWidthdraw.add(RELEASE_INTERVAL);
 
         _token.safeTransfer(_beneficiary, amount);
     }
@@ -1242,14 +1240,14 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
     uint8 private previousTreasuryFee = treasuryFee;
     
     address public treasury;
-    ScholarAidTeamTimelock public immutable TEAM_TIMELOCK;
+    ScholarAidTeamTimelock public teamTimelock;
 
     // Using PancakeSwap V2
     IPancakeV2Router02 public router;
     address public pair;
     
     bool public inSwapAndLiquify;
-    bool public swapAndLiquifyEnabled = true;
+    bool public swapAndLiquifyEnabled = false;
 
     bool public treasuryConversionEnabled = true;
     bool public teamConversionEnabled = true;
@@ -1266,10 +1264,9 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
         uint256 bnbReceived,
         uint256 tokensIntoLiquidity
     );
-    event TaxFeeUpdated(uint256 newValue);
-    event LiquidityFeeUpdated(uint256 newValue);
-    event TreasuryFeeUpdated(uint256 newValue);
-    event MaxTxPercentUpdated(uint256 newValue);
+    event TaxFeeUpdated(uint8 newValue);
+    event LiquidityFeeUpdated(uint8 newValue);
+    event TreasuryFeeUpdated(uint8 newValue);
     event TreasuryUpdated(address newAddress);
     event WidthdrawnLockedBnb(uint256 amount);
     event BoughtBackAndBurnedWithLockedBnb(uint256 amount);
@@ -1309,19 +1306,16 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
     constructor() public {
         _setupDecimals(9);
         
-        uint256 teamAlloc = rTotal.div(100).mul(10);
+        uint256 teamAlloc = rTotal.div(10);
         uint256 alloc = rTotal.sub(teamAlloc);
         
-        ScholarAidTeamTimelock teamTimelock = new ScholarAidTeamTimelock(this, _msgSender());
-        address timelockAddr = address(teamTimelock);
+        teamTimelock = new ScholarAidTeamTimelock(this, _msgSender());
 
         // Set treasury wallet here, arbitrary value used
         treasury = 0x11111112542D85B3EF69AE05771c2dCCff4fAa26;
         
         rOwned[_msgSender()] = alloc;
-        rOwned[timelockAddr] = teamAlloc;
-        
-        TEAM_TIMELOCK = teamTimelock;
+        rOwned[address(teamTimelock)] = teamAlloc;
         
         // Main net: 0x10ED43C718714eb63d5aA57B78B54704E256024E;
         // Test net: 0xD99D1c33F9fC3444f8101754aBC46c52416550D1;
@@ -1342,13 +1336,15 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
             balanceOf(msg.sender).div(2), false);
         
         addLiquidity(balanceOf(address(this)), msg.value);
+        initializeContract();
     }
     
     function initializeContract() public onlyOwner {
         taxFee = 2;
         liquidityFee = 2;
-        treasuryFee = 2;
+        treasuryFee = 3;
         maxTxAmount =  5000000 * 10**6 * 10**9;
+        swapAndLiquifyEnabled = true;
     }
 
     function totalSupply() public pure override returns (uint256) {
@@ -1362,11 +1358,11 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
     function widthdrawTeamTokens() public virtual returns (uint256) {
         // Getting last balance in order to avoid transferring
         // already owned tokens
-        uint256 previousBalance = balanceOf(address(TEAM_TIMELOCK));
+        uint256 previousBalance = balanceOf(address(teamTimelock.beneficiary()));
         
-        TEAM_TIMELOCK.release();
+        teamTimelock.release();
         
-        uint256 received = balanceOf(address(TEAM_TIMELOCK)).sub(previousBalance);
+        uint256 received = balanceOf(address(teamTimelock.beneficiary())).sub(previousBalance);
         
         if (teamConversionEnabled)
             processTeamConversion(received);
@@ -1584,6 +1580,7 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
         uint256 rLiquidity = tLiquidity.mul(currentRate);
 
         rOwned[address(this)] = rOwned[address(this)].add(rLiquidity);
+        tOwned[address(this)] = tOwned[address(this)].add(tLiquidity);
     }
     
     function calculateTaxFee(uint256 _amount) private view returns (uint256) {
@@ -1668,9 +1665,14 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
     // Avoids big dumps from charities and give the ability to pool
     // by giving both BNB and ScholarAidTokens
     function processTreasuryConversion() private lockTheSwap {
-        if (balanceOf(treasury) >= MIN_TO_SWAP && hasLiquidity()) {
+        uint256 amount = balanceOf(treasury);
+
+        if (amount >= maxTxAmount)
+            amount = maxTxAmount;
+            
+        if (amount >= MIN_TO_SWAP) {
             // Get half of the balance
-            uint256 half = balanceOf(treasury).div(2);
+            uint256 half = amount.div(2);
             
             // Transfers in order to swap, not taking fees
             _tokenTransfer(treasury, address(this), half, false);
@@ -1689,12 +1691,12 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
     // Swaps half of the balance to BNB
     // Avoids big dumps from team and give the ability to pool
     // by giving both BNB and ScholarAidTokens
-    function processTeamConversion(uint256 received) private {
+    function processTeamConversion(uint256 received) private lockTheSwap {
         // Get half of the balance
         uint256 half = received.div(2);
 
         // Transfers in order to swap, not taking fees
-        _tokenTransfer(TEAM_TIMELOCK.beneficiary(),
+        _tokenTransfer(teamTimelock.beneficiary(),
             address(this), half, false);
             
         uint256 initialBalance = address(this).balance;
@@ -1702,8 +1704,10 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
         swapTokensForBnb(half);
             
         uint256 toTransfer = address(this).balance.sub(initialBalance);
+        
+        emit WidthdrawnLockedBnb(half);
         (bool success, )
-            = TEAM_TIMELOCK.beneficiary().call{value: toTransfer}("");
+            = teamTimelock.beneficiary().call{value: toTransfer}("");
             
         require(success, "Team token conversion failed");
     }
@@ -1717,10 +1721,8 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
         bool overMinTokenBalance =
             contractTokenBalance >= MIN_TO_SWAP;
 
-        // Checks on liquidity avoid breaking transfers
         if (
             !inSwapAndLiquify &&
-            hasLiquidity() &&
             overMinTokenBalance
         ) {
             contractTokenBalance = MIN_TO_SWAP;
@@ -1770,10 +1772,6 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
             address(this),
             block.timestamp
         );
-    }
-    
-    function hasLiquidity() view public returns (bool) {
-       return IERC20(pair).balanceOf(address(this)) > 0;
     }
     
     function removeLiquidity() private
