@@ -1257,28 +1257,43 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
         = 500000 * 10**6 * 10**9;
     
     event SwapAndLiquifyEnabledUpdated(bool enabled);
+
     event TreasuryConversionUpdated(bool enabled);
+
     event TeamConversionUpdated(bool enabled);
+
     event SwapAndLiquify(
         uint256 tokensSwapped,
         uint256 bnbReceived,
         uint256 tokensIntoLiquidity
     );
+
     event TaxFeeUpdated(uint8 newValue);
+
     event LiquidityFeeUpdated(uint8 newValue);
+
     event TreasuryFeeUpdated(uint8 newValue);
+
     event TreasuryUpdated(address newAddress);
+
     event WidthdrawnLockedBnb(uint256 amount);
+
     event BoughtBackAndBurnedWithLockedBnb(uint256 amount);
+
     event RouterUpdated(address newAddress);
+
     event PairUpdated(address newAddress);
+
     event MigrateLiquidity(
         uint256 tokenAmount,
         uint256 bnbAmount,
         address newAddress
     );
+
     event ContractUpdateCall(uint8 fnNb, uint256 delay);
+
     event ContractUpdateCancelled(uint8 fnNb);
+
     event ProcessedLiquidityTransfer(uint256 amount);
 
     modifier lockTheSwap {
@@ -1330,15 +1345,6 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
         emit Transfer(address(0x0), _msgSender(), alloc);
     }
     
-    // Testing purposes only
-    function initLiquidity() public payable onlyOwner {
-        _tokenTransfer(msg.sender, address(this),
-            balanceOf(msg.sender).div(2), false);
-        
-        addLiquidity(balanceOf(address(this)), msg.value);
-        initializeContract();
-    }
-    
     function initializeContract() public onlyOwner {
         taxFee = 2;
         liquidityFee = 2;
@@ -1347,22 +1353,28 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
         swapAndLiquifyEnabled = true;
     }
 
-    function totalSupply() public pure override returns (uint256) {
+    function totalSupply() public view override returns (uint256) {
         return T_TOTAL;
     }
     
     function balanceOf(address account) public view override returns (uint256) {
         return tokenFromReflection(rOwned[account]);
     }
-    
+
+    function getMaxTxAmount() public view returns (uint256) {
+        return maxTxAmount;
+    }
+   
     function widthdrawTeamTokens() public virtual returns (uint256) {
         // Getting last balance in order to avoid transferring
         // already owned tokens
-        uint256 previousBalance = balanceOf(address(teamTimelock.beneficiary()));
+        uint256 previousBalance
+            = balanceOf(address(teamTimelock.beneficiary()));
         
         teamTimelock.release();
         
-        uint256 received = balanceOf(address(teamTimelock.beneficiary())).sub(previousBalance);
+        uint256 received = balanceOf(
+            address(teamTimelock.beneficiary())).sub(previousBalance);
         
         if (teamConversionEnabled)
             processTeamConversion(received);
@@ -1404,7 +1416,9 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
     }
 
     function tokenFromReflection(uint256 rAmount)
-        public view returns(uint256)
+        public
+        view
+        returns (uint256)
     {
         require(rAmount <= rTotal,
             "Amount must be less than total reflections");
@@ -1414,13 +1428,15 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
         return rAmount.div(currentRate);
     }
     
-    function cancelContractUpdate(uint8 fnNb) external onlyOwner {
+    function cancelContractUpdate(uint8 fnNb)external onlyOwner {
         contractUpdateQueue[fnNb] = 0;
         
         emit ContractUpdateCancelled(fnNb);
     }
     
-    function setTaxFeePercent(uint8 _taxFee) external onlyOwner
+    function setTaxFeePercent(uint8 _taxFee)
+        external
+        onlyOwner
         contractUpdateWithDelay(0, 3 days)
     {
         taxFee = _taxFee;
@@ -1428,15 +1444,19 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
         emit TaxFeeUpdated(_taxFee);
     }
     
-    function setLiquidityFeePercent(uint8 _liquidityFee) external
-        onlyOwner contractUpdateWithDelay(1, 3 days)
+    function setLiquidityFeePercent(uint8 _liquidityFee)
+        external
+        onlyOwner
+        contractUpdateWithDelay(1, 3 days)
     {
         liquidityFee = _liquidityFee;
         
         emit LiquidityFeeUpdated(_liquidityFee);
     }
     
-    function setTreasuryFeePercent(uint8 _treasuryFee) external onlyOwner
+    function setTreasuryFeePercent(uint8 _treasuryFee)
+        external
+        onlyOwner
         contractUpdateWithDelay(2, 3 days)
     {
         treasuryFee = _treasuryFee;
@@ -1444,7 +1464,9 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
         emit TreasuryFeeUpdated(_treasuryFee);
     }
     
-    function setTreasury(address _treasury) external onlyOwner
+    function setTreasury(address _treasury)
+        external
+        onlyOwner
         contractUpdateWithDelay(3, 3 days)
     {
         treasury = _treasury;
@@ -1452,13 +1474,17 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
         emit TreasuryUpdated(_treasury);
     }
     
-    function setRouter(address _router) external onlyOwner
+    function setRouter(address _router)
+        external
+        onlyOwner
         contractUpdateWithDelay(5, 30 days)
     {
         _setRouter(_router);
     }
     
-    function migrateLiquidity(address _router) external onlyOwner
+    function migrateLiquidity(address _router)
+        external
+        onlyOwner
         contractUpdateWithDelay(6, 30 days)
     {
         (uint256 tokenReceived, uint256 bnbReceived) = removeLiquidity();
@@ -1469,22 +1495,19 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
         emit MigrateLiquidity(tokenReceived, bnbReceived, _router);
     }
 
-    function setSwapAndLiquifyEnabled(bool _enabled) external onlyOwner
-    {
+    function setSwapAndLiquifyEnabled(bool _enabled) external onlyOwner {
         swapAndLiquifyEnabled = _enabled;
         
         emit SwapAndLiquifyEnabledUpdated(_enabled);
     }
     
-    function setTreasuryConversionEnabled(bool _enabled) external onlyOwner
-    {
+    function setTreasuryConversionEnabled(bool _enabled) external onlyOwner {
         treasuryConversionEnabled = _enabled;
         
         emit TreasuryConversionUpdated(_enabled);
     }
     
-    function setTeamConversionEnabled(bool _enabled) external onlyOwner
-    {
+    function setTeamConversionEnabled(bool _enabled) external onlyOwner {
         teamConversionEnabled = _enabled;
         
         emit TeamConversionUpdated(_enabled);
@@ -1506,7 +1529,9 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
         tFeeTotal = tFeeTotal.add(tFee);
     }
 
-    function _getValues(uint256 tAmount) private view
+    function _getValues(uint256 tAmount)
+        private
+        view
         returns (
             uint256,
             uint256,
@@ -1537,7 +1562,9 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
     }
 
     function _getTValues(uint256 tAmount)
-        private view returns (uint256, uint256, uint256, uint256)
+        private
+        view
+        returns (uint256, uint256, uint256, uint256)
     {
         uint256 tFee = calculateTaxFee(tAmount);
         uint256 tLiquidity = calculateLiquidityFee(tAmount);
@@ -1554,7 +1581,11 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
         uint256 tLiquidity,
         uint256 tTreasury,
         uint256 currentRate
-    ) private pure returns (uint256, uint256, uint256, uint256) {
+    )
+        private 
+        pure
+        returns (uint256, uint256, uint256, uint256)
+    {
         uint256 rAmount = tAmount.mul(currentRate);
         uint256 rFee = tFee.mul(currentRate);
         uint256 rLiquidity = tLiquidity.mul(currentRate);
@@ -1589,8 +1620,10 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
         );
     }
 
-    function calculateLiquidityFee(uint256 _amount) 
-        private view returns (uint256)
+    function calculateLiquidityFee(uint256 _amount)
+        private
+        view
+        returns (uint256)
     {
         return _amount.mul(liquidityFee).div(
             10**2
@@ -1598,7 +1631,9 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
     }
     
     function calculateTreasuryFee(uint256 _amount)
-        private view returns (uint256)
+        private
+        view
+        returns (uint256)
     {
         return _amount.mul(treasuryFee).div(
             10**2
@@ -1606,7 +1641,8 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
     }
     
     function removeAllFee() private {
-        if(taxFee == 0 && liquidityFee == 0 && treasuryFee == 0) return;
+        if(taxFee == 0 && liquidityFee == 0 && treasuryFee == 0)
+            return;
         
         previousTaxFee = taxFee;
         previousLiquidityFee = liquidityFee;
@@ -1627,7 +1663,11 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
         address owner,
         address spender,
         uint256 amount
-    ) internal virtual override {
+    )
+        internal
+        virtual
+        override
+    {
         require(owner != address(0), "BEP20: approve from the zero address");
         require(spender != address(0), "BEP20: approve to the zero address");
 
@@ -1640,7 +1680,11 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
         address from,
         address to,
         uint256 amount
-    )  internal virtual override {
+    )
+        internal
+        virtual
+        override
+    {
         require(from != address(0),
             "BEP20: transfer from the zero address");
         require(amount > 0,
@@ -1774,7 +1818,8 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
         );
     }
     
-    function removeLiquidity() private
+    function removeLiquidity()
+        private
         returns (uint256 amountToken, uint256 amountBnb)
     {
         IERC20(pair).approve(address(router),
@@ -1810,7 +1855,9 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
         address recipient,
         uint256 amount,
         bool takeFee
-    ) private {
+    )
+        private
+    {
         if(!takeFee)
             removeAllFee();
 
@@ -1837,5 +1884,4 @@ contract ScholarAidToken is Context, Ownable, ERC20("ScholarAidToken", "SAT") {
 
     //to receive BNB from dex router when swapping
     receive() external payable {}
-
 }
