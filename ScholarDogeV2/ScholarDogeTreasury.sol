@@ -125,6 +125,24 @@ contract ScholarDogeTreasury {
 
         emit SubmitTx(msg.sender, txIndex, _to, _value, _data, _isBnb);
     }
+    
+    function submitAddOwnerTx(address _target)
+        public
+        onlyOwner
+    {
+        uint txIndex = transactions.length;
+
+        transactions.push(Transaction({
+            to: _target,
+            value: 0,
+            data: "",
+            executed: false,
+            numConfirmations: 0,
+            isBnb: false
+        }));
+
+        emit SubmitTx(msg.sender, txIndex, _target, 0, "", false);
+    }
 
     function confirmTx(uint _txIndex)
         public
@@ -155,12 +173,19 @@ contract ScholarDogeTreasury {
 
         transaction.executed = true;
         
-        if (transaction.isBnb) {
+        if (transaction.value == 0) {
+            // If no value => adding an owner
+            owners.push(transaction.to);
+            
+            numConfirmationsRequired = uint8(owners.length) / 2 + 1;
+        } else if (transaction.isBnb) {
+            // Sending bnb
             (bool success, )
                 = transaction.to.call{value: transaction.value}(transaction.data);
             
             require(success, "ScholarDogeTreasury: tx failed");
         } else {
+            // Sending $SDOGE
             bool success
                 = sdoge.transfer(transaction.to, transaction.value);
                 
@@ -200,7 +225,13 @@ contract ScholarDogeTreasury {
     function getTransaction(uint _txIndex)
         public
         view
-        returns (address to, uint value, bytes memory data, bool executed, uint numConfirmations)
+        returns (
+            address to,
+            uint value,
+            bytes memory data,
+            bool executed,
+            uint numConfirmations,
+            bool isBnb)
     {
         Transaction storage transaction = transactions[_txIndex];
 
@@ -209,7 +240,8 @@ contract ScholarDogeTreasury {
             transaction.value,
             transaction.data,
             transaction.executed,
-            transaction.numConfirmations
+            transaction.numConfirmations,
+            transaction.isBnb
         );
     }
 }
