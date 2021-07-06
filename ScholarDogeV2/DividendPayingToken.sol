@@ -5,20 +5,20 @@ pragma solidity ^0.8.0;
 import "./BEP20.sol";
 import "./SafeMath.sol";
 import "./SignedSafeMath.sol";
-import "./DividendPayingTokenInterface.sol";
-import "./DividendPayingTokenOptionalInterface.sol";
+import "./IDividendPayingToken.sol";
+import "./IDividendPayingTokenOptional.sol";
 
 /// @title Dividend-Paying Token
 /// @author Roger Wu (https://github.com/roger-wu)
-/// @dev A mintable ERC20 token that allows anyone to pay
+/// @dev A mintable BEP20 token that allows anyone to pay
 /// and distribute ether to token holders as dividends and 
 /// allows token holders to withdraw their dividends.
 /// Reference: the source code of PoWH3D:
 /// https://etherscan.io/address/0xB3775fB83F7D12A36E0475aBdD1FCA35c091efBe#code
 contract DividendPayingToken is 
     BEP20,
-    DividendPayingTokenInterface,
-    DividendPayingTokenOptionalInterface
+    IDividendPayingToken,
+    IDividendPayingTokenOptional
 {
   using SafeMath for uint256;
   using SignedSafeMath for int256;
@@ -192,3 +192,4 @@ contract DividendPayingToken is
     }
   }
 }
+
