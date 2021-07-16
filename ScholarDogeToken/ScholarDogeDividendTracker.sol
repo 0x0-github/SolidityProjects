@@ -25,18 +25,46 @@ contract ScholarDogeDividendTracker is DividendPayingToken, Ownable {
     event ClaimWaitUpdated(uint256 indexed newValue, uint256 indexed oldValue);
 
     event Claim(address indexed account, uint256 amount, bool indexed automatic);
+    
+    event WithdrawGasUpdated(uint256 gas);
 
     constructor()
         DividendPayingToken("$SDOGE_DT", "$SDOGE_Dividend_Tracker")
     {
-    	claimWait = 3600;
+    	claimWait = 86400;
         minimumTokenBalanceForDividends = 10000 * (10**9); //must hold 10000+ tokens
+    }
+    
+    function decimals() public view virtual override returns (uint8) {
+        return 9;
+    }
+    
+    function updateWithdrawGas(uint256 gas) external onlyOwner {
+        require(
+            gas > 0, 
+            "$SDOGE_DT: <= 0"
+        );
+        
+        withdrawGas = gas;
+        
+        emit WithdrawGasUpdated(gas);
+    }
+    
+    function updateClaimWait(uint256 newClaimWait) external onlyOwner {
+        require(
+            newClaimWait >= 3600 && newClaimWait <= 86400,
+            "$SDOGE_DT: 1h < claimWait < 24h"
+        );
+        
+        emit ClaimWaitUpdated(newClaimWait, claimWait);
+        
+        claimWait = newClaimWait;
     }
     
     function withdrawDividend() public pure override {
         require(
             false, 
-            "$SDOGE_DT: Use claim from $SDOGE."
+            "$SDOGE_DT: Use claim from $SDOGE"
         );
     }
 
@@ -55,17 +83,6 @@ contract ScholarDogeDividendTracker is DividendPayingToken, Ownable {
     	tokenHoldersMap.remove(account);
 
     	emit ExcludeFromDividends(account);
-    }
-
-    function updateClaimWait(uint256 newClaimWait) external onlyOwner {
-        require(
-            newClaimWait >= 3600 && newClaimWait <= 86400,
-            "$SDOGE_DT: 1h < claimWait < 24h"
-        );
-        
-        emit ClaimWaitUpdated(newClaimWait, claimWait);
-        
-        claimWait = newClaimWait;
     }
 
     function getNumberOfTokenHolders() external view returns(uint256) {
@@ -93,23 +110,23 @@ contract ScholarDogeDividendTracker is DividendPayingToken, Ownable {
 
         if (index >= 0) {
             if (uint256(index) > lastProcessedIndex) {
-                iterationsUntilProcessed = index.sub(int256(lastProcessedIndex));
+                iterationsUntilProcessed = index - (int256(lastProcessedIndex));
             } else {
                 uint256 processesUntilEndOfArray
                     = tokenHoldersMap.keys.length > lastProcessedIndex ? 
-                        tokenHoldersMap.keys.length.sub(lastProcessedIndex) :
+                        tokenHoldersMap.keys.length - lastProcessedIndex :
                         0;
 
-                iterationsUntilProcessed = index.add(int256(processesUntilEndOfArray));
+                iterationsUntilProcessed = index + int256(processesUntilEndOfArray);
             }
         }
 
         withdrawableDividends = withdrawableDividendOf(account);
         totalDividends = accumulativeDividendOf(account);
         lastClaimTime = lastClaimTimes[account];
-        nextClaimTime = lastClaimTime > 0 ? lastClaimTime.add(claimWait) : 0;
+        nextClaimTime = lastClaimTime > 0 ? lastClaimTime + claimWait : 0;
         secondsUntilAutoClaimAvailable = nextClaimTime > block.timestamp ?
-            nextClaimTime.sub(block.timestamp) : 0;
+            nextClaimTime - block.timestamp : 0;
     }
 
     function getAccountAtIndex(uint256 index)
@@ -126,7 +143,7 @@ contract ScholarDogeDividendTracker is DividendPayingToken, Ownable {
             uint256
         )
     {
-    	if(index >= tokenHoldersMap.size()) {
+    	if (index >= tokenHoldersMap.size()) {
             return (
                 0x0000000000000000000000000000000000000000, 
                 -1,
@@ -149,7 +166,7 @@ contract ScholarDogeDividendTracker is DividendPayingToken, Ownable {
     		return false;
     	}
 
-    	return block.timestamp.sub(lastClaimTime) >= claimWait;
+    	return block.timestamp - lastClaimTime >= claimWait;
     }
 
     function setBalance(
@@ -205,7 +222,7 @@ contract ScholarDogeDividendTracker is DividendPayingToken, Ownable {
     		uint256 newGasLeft = gasleft();
 
     		if (gasLeft > newGasLeft)
-    			gasUsed = gasUsed.add(gasLeft.sub(newGasLeft));
+    			gasUsed = gasUsed + gasLeft - newGasLeft;
 
     		gasLeft = newGasLeft;
     	}

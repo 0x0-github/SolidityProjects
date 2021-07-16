@@ -3,7 +3,6 @@
 pragma solidity 0.8.6;
 
 import "./SafeBEP20.sol";
-import "./SafeMath.sol";
 
 /**
  * @dev A token holder contract that will allow a beneficiary to extract
@@ -11,8 +10,7 @@ import "./SafeMath.sol";
  */
 contract ScholarDogeTeamTimelock {
     using SafeBEP20 for IBEP20;
-    using SafeMath for uint256;
-    
+
     // Defines the release interval
     uint8 constant public RELEASE_PERCENTAGE = 4;
     
@@ -30,6 +28,8 @@ contract ScholarDogeTeamTimelock {
 
     // beneficiary of tokens after they are released
     address public beneficiary;
+    
+    event TeamTokensWithdrawn(uint256 indexed amount);
 
     constructor (IBEP20 _token, address _beneficiary) {
         token = _token;
@@ -45,7 +45,7 @@ contract ScholarDogeTeamTimelock {
             "ScholarDogeTeamTimelock: before release time"
         );
             
-        nextWithdraw = nextWithdraw.add(RELEASE_INTERVAL);
+        nextWithdraw = nextWithdraw + RELEASE_INTERVAL;
         
         if (baseTokenAmount == 0)
             baseTokenAmount = token.balanceOf(address(this));
@@ -58,11 +58,11 @@ contract ScholarDogeTeamTimelock {
         );
 
         token.safeTransfer(beneficiary, amount);
-        _withdrawRewards(address(0x0));
+        _withdrawRewards();
     }
     
     function getReleaseAmount() public view returns (uint256) {
-        uint256 amount = baseTokenAmount.mul(RELEASE_PERCENTAGE).div(100);
+        uint256 amount = baseTokenAmount * RELEASE_PERCENTAGE / 100;
         
         if (amount > token.balanceOf(address(this)))
             amount = token.balanceOf(address(this));
@@ -70,25 +70,15 @@ contract ScholarDogeTeamTimelock {
         return amount;
     }
     
-    function _withdrawRewards(address _token) private {
-        // If 0x0 = BNB
-        if (_token == address(0x0)) {
-            uint256 bnbBalance = address(this).balance;
+    function _withdrawRewards() private {
+        uint256 bnbBalance = address(this).balance;
         
-            if (bnbBalance > 0) {
-                (bool success,) = beneficiary.call{value: bnbBalance}("");
+        if (bnbBalance > 0) {
+            (bool success,) = beneficiary.call{value: bnbBalance}("");
                 
-                require(
-                    success,
-                    "ScholarDogeTeamTimelock: Failed tranfering BNB from fees"
-                );
-            }
-        } else {
-            IBEP20 rewardToken = IBEP20(_token);
-            
-            rewardToken.safeTransfer(
-                beneficiary,
-                rewardToken.balanceOf(address(this))
+            require(
+                success,
+                "ScholarDogeTeamTimelock: Failed tranfering BNB from fees"
             );
         }
     }
