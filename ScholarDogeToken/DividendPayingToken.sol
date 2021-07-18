@@ -66,6 +66,10 @@ contract DividendPayingToken is
     receive() external payable {
         distributeDividends();
     }
+    
+    function decimals() public view virtual override returns (uint8) {
+        return 9;
+    }
 
     /// @notice Distributes ether to token holders as dividends.
     /// @dev It reverts if the total supply of tokens is 0.
@@ -175,8 +179,8 @@ contract DividendPayingToken is
         override
         returns (uint256)
     {
-        return (magnifiedDividendPerShare * balanceOf(_owner))
-            + magnifiedDividendCorrections[_owner].toUint256Safe() / magnitude;
+        return ((magnifiedDividendPerShare * balanceOf(_owner)).toInt256Safe()
+            + magnifiedDividendCorrections[_owner]).toUint256Safe() / magnitude;
     }
 
     /// @dev Internal function that transfer tokens from one address to another.
