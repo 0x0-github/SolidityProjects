@@ -199,6 +199,10 @@ contract ScholarDogeToken is BEP20, Ownable {
         _transfer(owner(), address(0x2), foundationAlloc);
     }
     
+    receive() external payable {
+
+  	}
+    
     function decimals() public view virtual override returns (uint8) {
         return 9;
     }

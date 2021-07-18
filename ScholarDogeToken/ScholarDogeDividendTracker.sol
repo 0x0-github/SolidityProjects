@@ -31,12 +31,8 @@ contract ScholarDogeDividendTracker is DividendPayingToken, Ownable {
     constructor()
         DividendPayingToken("$SDOGE_DT", "$SDOGE_Dividend_Tracker")
     {
-    	claimWait = 86400;
+    	claimWait = 3600;
         minimumTokenBalanceForDividends = 10000 * (10**9); //must hold 10000+ tokens
-    }
-    
-    function decimals() public view virtual override returns (uint8) {
-        return 9;
     }
     
     function updateWithdrawGas(uint256 gas) external onlyOwner {
@@ -110,7 +106,7 @@ contract ScholarDogeDividendTracker is DividendPayingToken, Ownable {
 
         if (index >= 0) {
             if (uint256(index) > lastProcessedIndex) {
-                iterationsUntilProcessed = index - (int256(lastProcessedIndex));
+                iterationsUntilProcessed = index - int256(lastProcessedIndex);
             } else {
                 uint256 processesUntilEndOfArray
                     = tokenHoldersMap.keys.length > lastProcessedIndex ? 
