@@ -40,6 +40,8 @@ contract ScholarDogeToken is BEP20, Ownable {
     mapping (uint8 => uint256) public contractUpdates;
 
     uint256 public maxHold = SUPPLY;
+    
+    uint256 public totalCollected;
 
     // Set a multi-sign wallet here
     address public treasury;
@@ -218,8 +220,8 @@ contract ScholarDogeToken is BEP20, Ownable {
         feeStruct.burnFee = 0;
         feeStruct.totalFee = 16;
 
-        // Initialized at 0.5% totalSupply
-        maxSellTx = SUPPLY * 5 / 10 ** 3;
+        // Initialized at 0.1% totalSupply
+        maxSellTx = SUPPLY * 1 / 10 ** 3;
         // Initialized to 2.5% totalSupply
         maxHold = SUPPLY * 25 / 10 ** 3;
 
@@ -584,6 +586,7 @@ contract ScholarDogeToken is BEP20, Ownable {
             }
 
         	amount = amount - treasuryFee - burnFee - conversionFees;
+        	totalCollected += treasuryFee;
         	
         	// Restricting the max token users can hold
         	require(

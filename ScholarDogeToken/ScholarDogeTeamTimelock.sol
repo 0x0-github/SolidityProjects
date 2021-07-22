@@ -36,6 +36,10 @@ contract ScholarDogeTeamTimelock {
         beneficiary = _beneficiary;
     }
     
+    receive() external payable {
+
+  	}
+    
     /**
      * @notice Transfers tokens held by timelock to beneficiary.
      */

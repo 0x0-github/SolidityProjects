@@ -32,7 +32,7 @@ contract DividendPayingToken is
     uint256 internal magnifiedDividendPerShare;
     
     // Used gas for withdraw, can be updated as it may change
-    uint256 internal withdrawGas = 3000;
+    uint256 internal withdrawGas = 6000;
 
     // About dividendCorrection:
     // If the token balance of a `_user` is never changed, 
