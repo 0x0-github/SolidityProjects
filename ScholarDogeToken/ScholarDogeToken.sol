@@ -228,7 +228,7 @@ contract ScholarDogeToken is BEP20, Ownable {
         rewardStruct.swapAndLiquifyOn = true;
         rewardStruct.rewardsOn = true;
         rewardStruct.minToSwap
-            = uint128(SUPPLY / 10 ** 4);
+            = uint128(SUPPLY * 5 / 10 ** 5);
         
         treasury = _treasury;
         // Treasury will not be taxed as used for charities
