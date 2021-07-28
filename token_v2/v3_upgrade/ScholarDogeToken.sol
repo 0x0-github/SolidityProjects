@@ -1,0 +1,899 @@
+// SPDX-License-Identifier: MIT
+
+pragma solidity 0.8.6;
+
+import "./ScholarDogeTeamTimelock.sol";
+import "./ScholarDogeDividendTracker2.sol";
+import "./IPancakePair.sol";
+import "./IPancakeFactory.sol";
+import "./IPancakeRouter02.sol";
+
+contract ScholarDogeToken2 is BEP20, Ownable {
+    struct FeeStruct {
+        uint8 rewardFee;
+        uint8 lpFee;
+        uint8 treasuryFee;
+        uint8 burnFee;
+        uint8 totalFee;
+    }
+
+    struct RewardStruct {
+        bool swapAndLiquifyOn;
+        bool rewardsOn;
+        bool burnOn;
+        uint128 minToSwap;
+        address rewardToken;
+        uint8 swapSlippage;
+        uint8 rewardSlippage;
+    }
+
+    struct DexStruct {
+        IPancakeRouter02 router;
+        address pair;
+    }
+
+    uint256 private constant MAX_SUPPLY = 1000000000 * (10**9);
+    // Sells have fees of 12 and 6 (10 * 1.2 and 5 * 1.2)
+    uint8 private constant SELL_FACTOR = 120;
+
+    // Securize the launch by allowing 1 sell tx / block
+    // also reverting / taxing if gas price set too high
+    bool public safeLaunch = true;
+
+    // Stores the last sells times / address
+    mapping(address => uint256) private safeLaunchSells;
+
+    // Stores the contracts updates
+    // index = function number (arbitrary)
+    // value = block timestamp of the first call + delay
+    mapping(uint8 => uint256) public pendingContractUpdates;
+
+    uint256 public maxHold = MAX_SUPPLY;
+
+    uint256 public totalCollected;
+
+    // Set a multi-sign wallet here
+    address public treasury;
+
+    bool private swapping;
+    bool public init;
+
+    uint256 public maxSellTx = MAX_SUPPLY;
+
+    // use by default 300,000 gas to process auto-claiming dividends
+    uint256 private requiredGas = 300000;
+
+    FeeStruct public feeStruct;
+    RewardStruct public rewardStruct;
+    DexStruct public dexStruct;
+
+    ScholarDogeTeamTimelock public teamTimelock;
+    ScholarDogeDividendTracker2 public divTracker;
+
+    mapping(address => bool) public excludedFromFees;
+    mapping(address => bool) public automatedMarketMakerPairs;
+
+    event UpdateDividendTracker(address indexed _dividendTracker);
+
+    event FeeStructUpdated(
+        uint8 _rewardFee,
+        uint8 _lpFee,
+        uint8 _treasuryFee,
+        uint8 _burnFee
+    );
+
+    event RewardStructUpdated(
+        bool _swapAndLiquifyOn,
+        bool _rewardsOn,
+        bool _burnOn,
+        uint256 _minToSwap,
+        address indexed _rewardToken,
+        uint8 indexed _swapSlippage,
+        uint8 indexed _rewardSlippage
+    );
+
+    event DexStructUpdated(address indexed _router, address indexed _pair);
+
+    event MaxSellTxUpdated(uint256 indexed _maxSellTx);
+
+    event MaxHoldUpdated(uint256 indexed _maxHold);
+
+    event TreasuryUpdated(address indexed _treasury);
+
+    event ExcludeFromFees(address indexed _account, bool _excluded);
+
+    event SetAutomatedMarketMakerPair(
+        address indexed _pair,
+        bool indexed _value
+    );
+
+    event RequiredGasUpdated(uint256 indexed newValue);
+
+    event SwapAndLiquify(
+        uint256 tokensSwapped,
+        uint256 bnbReceived,
+        uint256 addedLp
+    );
+
+    event SendDividends(
+        uint256 tokens,
+        uint256 amount
+    );
+
+    event ProcessedDividendTracker(
+        uint256 iterations,
+        uint256 claims,
+        uint256 lastProcessedIndex,
+        bool indexed automatic,
+        uint256 gas,
+        address indexed processor
+    );
+
+    event MigrateLiquidity(
+        uint256 indexed tokenAmount,
+        uint256 indexed bnbAmount,
+        address indexed newAddress
+    );
+
+    event SafeLaunchDisabled();
+
+    event BotPunished(address indexed bot, uint256 indexed amount);
+
+    event ContractUpdateCall(uint8 indexed fnNb, uint256 indexed delay);
+
+    event ContractUpdateCancelled(uint8 indexed fnNb);
+
+    // Adds a security on sensible contract updates
+    modifier safeContractUpdate(uint8 fnNb, uint256 delay) {
+        // TODO Remove here, testing only
+        _;
+        /*if (pendingContractUpdates[fnNb] == 0) {
+            pendingContractUpdates[fnNb] = block.timestamp + delay;
+
+            emit ContractUpdateCall(fnNb, delay);
+
+            return;
+        } else {
+            require(
+                block.timestamp >= contractUpdates[fnNb],
+                "$SDOGE: Too early"
+            );
+
+            pendingContractUpdates[fnNb] = 0;
+
+            _;
+        }*/
+    }
+
+    modifier uninitialized() {
+        require(
+            !init,
+            "$SDOGE: Already init");
+
+        _;
+
+        init = true;
+    }
+
+    constructor() BEP20("ScholarDoge", "$SDOGE") {
+        // Main net: 0x10ED43C718714eb63d5aA57B78B54704E256024E;
+        // Test net: 0xD99D1c33F9fC3444f8101754aBC46c52416550D1;
+        dexStruct.router
+            = IPancakeRouter02(0xD99D1c33F9fC3444f8101754aBC46c52416550D1);
+        dexStruct.pair = IPancakeFactory(dexStruct.router.factory())
+            .createPair(address(this), dexStruct.router.WETH());
+
+        divTracker = new ScholarDogeDividendTracker2(
+            address(this)
+        );
+
+        // TODO Exclude from dividends the deployer
+        divTracker.excludeFromDividends(address(divTracker));
+        divTracker.excludeFromDividends(address(this));
+        divTracker.excludeFromDividends(address(0x0));
+        divTracker.excludeFromDividends(address(dexStruct.router));
+
+        rewardStruct.rewardToken = dexStruct.router.WETH();
+        divTracker.addRewardToken(dexStruct.router.WETH());
+
+        _addAMMPair(dexStruct.pair, true);
+
+        teamTimelock = new ScholarDogeTeamTimelock(this, _msgSender());
+
+        // TODO Exclude from fee the deployer
+        // TODO Exclude marketing / foundation as well
+        excludedFromFees[address(this)] = true;
+        excludedFromFees[address(teamTimelock)] = true;
+        excludedFromFees[owner()] = true;
+        excludedFromFees[address(divTracker)] = true;
+    }
+
+    receive() external payable {
+
+    }
+
+    function decimals() public view virtual override returns (uint8) {
+        return 9;
+    }
+
+    function wbnb() public view returns (address) {
+        return dexStruct.router.WETH();
+    }
+
+    function getRewardToken() public view returns (address) {
+        return rewardStruct.rewardToken;
+    }
+
+    function initializeContract(address _treasury)
+        external
+        onlyOwner
+        uninitialized
+    {
+        feeStruct.rewardFee = 10;
+        feeStruct.lpFee = 3;
+        feeStruct.treasuryFee = 3;
+        feeStruct.burnFee = 0;
+        feeStruct.totalFee = 16;
+
+        // Arbitrary setting max slipplage
+        // ensure better security than common 100%
+        // will be updated depending on reward tokens
+        rewardStruct.swapSlippage = 15;
+        rewardStruct.rewardSlippage = 5;
+        // Initialized at 0.1% totalSupply
+        maxSellTx = MAX_SUPPLY * 1 / 10 ** 3;
+        // Initialized to 2.5% totalSupply
+        maxHold = MAX_SUPPLY * 25 / 10 ** 3;
+
+        rewardStruct.swapAndLiquifyOn = true;
+        rewardStruct.rewardsOn = true;
+        rewardStruct.minToSwap
+            = uint128(MAX_SUPPLY * 5 / 10 ** 5);
+
+        treasury = _treasury;
+        
+        // Treasury will not be taxed as used for charities
+        excludedFromFees[treasury] = true;
+        excludedFromFees[owner()] = false;
+    }
+    
+    function initSupply() external {
+        require(
+		    totalSupply() == 0,
+		    "$SDOGE: Supply already Initialized"
+	    );
+        
+        // Supply alloc
+        // 8.4% Private sale - 42% Presale - (29.4% Liquidity
+        // 5%
+        uint256 teamAlloc = MAX_SUPPLY * 5 / 100;
+        // 5.2%
+        uint256 marketingAlloc = MAX_SUPPLY * 52 / 1000;
+        // 10%
+        uint256 foundationAlloc = MAX_SUPPLY * 10 / 100;
+        
+        _mint(owner(), MAX_SUPPLY);
+        _transfer(owner(), address(teamTimelock), teamAlloc);
+        // Hardcode marketing / foundation multisig here only used here
+        _transfer(owner(), address(0x1), marketingAlloc);
+        _transfer(owner(), address(0x2), foundationAlloc);
+    }
+
+    // TODO Remove, Testing purposes only
+    function initLiquidity() external payable onlyOwner {
+        _transfer(_msgSender(), address(this),
+            balanceOf(_msgSender()) / 2);
+
+        _addLiquidity(balanceOf(address(this)), msg.value);
+    }
+
+    function withdrawTeamTokens()
+        external
+        virtual
+        onlyOwner
+    {
+        teamTimelock.release();
+    }
+
+    function cancelUpdate(uint8 fnNb) external onlyOwner {
+        pendingContractUpdates[fnNb] = 0;
+
+        emit ContractUpdateCancelled(fnNb);
+    }
+
+    function updateFeeStruct(
+        uint8 _rewardFee,
+        uint8 _lpFee,
+        uint8 _treasuryFee,
+        uint8 _burnFee
+    )
+        external
+        onlyOwner
+        safeContractUpdate(0, 3 days)
+    {
+        uint16 totalFees = _rewardFee + _lpFee + _treasuryFee + _burnFee;
+        // Max fees up to 25% max
+        require(
+            totalFees <= 25,
+            "$SDOGE: > 25"
+        );
+
+        feeStruct.rewardFee = _rewardFee;
+        feeStruct.lpFee = _lpFee;
+        feeStruct.treasuryFee = _treasuryFee;
+        feeStruct.burnFee = _burnFee;
+        feeStruct.totalFee = uint8(totalFees);
+
+        emit FeeStructUpdated(_rewardFee, _lpFee, _treasuryFee, _burnFee);
+    }
+
+    function setTreasury(address _treasury)
+        external
+        onlyOwner
+        safeContractUpdate(1, 3 days)
+    {
+        treasury = _treasury;
+
+        emit TreasuryUpdated(_treasury);
+    }
+
+    function setDividendTracker(address newAddress)
+        external
+        onlyOwner
+        safeContractUpdate(2, 3 days)
+    {
+        ScholarDogeDividendTracker2 newDividendTracker
+            = ScholarDogeDividendTracker2(payable(newAddress));
+
+        require(
+            newDividendTracker.owner() == address(this),
+            "$SDOGE: Tracker owner must be $SDOGE"
+        );
+        
+        divTracker = newDividendTracker;
+
+        divTracker.excludeFromDividends(address(newDividendTracker));
+        divTracker.excludeFromDividends(address(this));
+        divTracker.excludeFromDividends(address(dexStruct.router));
+        divTracker.excludeFromDividends(address(dexStruct.pair));
+
+        excludedFromFees[newAddress] = true;
+
+        emit UpdateDividendTracker(newAddress);
+    }
+
+    function updateDEXStruct(address _router)
+        external
+        onlyOwner
+        safeContractUpdate(3, 15 days)
+    {
+        _setDexStruct(_router);
+
+        emit DexStructUpdated(_router, dexStruct.pair);
+    }
+
+    function executeLiquidityMigration(address _router)
+        external
+        onlyOwner
+        safeContractUpdate(4, 15 days)
+    {
+        (uint256 tokenReceived, uint256 bnbReceived) = _removeLiquidity();
+
+        _setDexStruct(_router);
+        _addLiquidity(tokenReceived, bnbReceived);
+
+        emit MigrateLiquidity(tokenReceived, bnbReceived, _router);
+    }
+
+    function excludeFromFees(
+        address account,
+        bool excluded
+    )
+        external
+        onlyOwner
+        safeContractUpdate(5, 3 days)
+    {
+        excludedFromFees[account] = excluded;
+
+        emit ExcludeFromFees(account, excluded);
+    }
+
+    function setMaxSellTx(uint256 _amount)
+        external
+        onlyOwner
+        safeContractUpdate(6, 3 days)
+    {
+        // Protect users from being unable to sell their tokens
+        // Min to 0.01% and max to 1% total supply
+        require(
+            _amount >= MAX_SUPPLY / 10 ** 4 &&
+            _amount <= MAX_SUPPLY / 10 ** 2,
+            "$SDOGE: 0.01% < maxSellTx < 1% (supply)"
+        );
+
+        maxSellTx = _amount;
+
+        emit MaxSellTxUpdated(_amount);
+    }
+
+    function setMaxHoldAmount(uint256 _amount)
+        external
+        onlyOwner
+        safeContractUpdate(7, 3 days)
+    {
+        // Protect users from being unable to sell their tokens
+        // Min to 1% and max to 5% total supply
+        require(
+            _amount >= MAX_SUPPLY / 10 ** 2 &&
+            _amount <= MAX_SUPPLY * 5 / 10 ** 2,
+            "$SDOGE: 1% < maxHold < 5% (supply)"
+        );
+
+        maxHold = _amount;
+
+        emit MaxHoldUpdated(_amount);
+    }
+
+    function updateRewardStruct(
+        bool _swapAndLiquifyOn,
+        bool _rewardsOn,
+        bool _burnOn,
+        uint128 _minToSwap,
+        address _rewardToken,
+        uint8 _swapSlippage,
+        uint8 _rewardSlippage
+    )
+        external
+        onlyOwner
+    {
+        rewardStruct.swapAndLiquifyOn = _swapAndLiquifyOn;
+        rewardStruct.rewardsOn = _rewardsOn;
+        rewardStruct.burnOn = _burnOn;
+        rewardStruct.minToSwap = _minToSwap;
+        rewardStruct.rewardToken = _rewardToken;
+        rewardStruct.swapSlippage = _swapSlippage;
+        rewardStruct.rewardSlippage = _rewardSlippage;
+        divTracker.addRewardToken(_rewardToken);
+
+        emit RewardStructUpdated(
+            _swapAndLiquifyOn,
+            _rewardsOn,
+            _burnOn,
+            _minToSwap,
+            _rewardToken,
+            _swapSlippage,
+            _rewardSlippage
+        );
+    }
+
+    function setAutomatedMarketMakerPair(
+        address _pair,
+        bool value
+    )
+        external
+        onlyOwner
+    {
+        require(
+            _pair != dexStruct.pair,
+            "$SDOGE: Can't remove current"
+        );
+
+        _addAMMPair(_pair, value);
+
+        emit SetAutomatedMarketMakerPair(_pair, value);
+    }
+
+    function switchSafeLaunchOff() external onlyOwner {
+        safeLaunch = false;
+
+        emit SafeLaunchDisabled();
+    }
+
+    function updateRequiredGas(uint256 newValue) external onlyOwner {
+        requiredGas = newValue;
+
+        emit RequiredGasUpdated(newValue);
+    }
+
+    function updateRequiredWithdrawGas(uint256 gas) external onlyOwner {
+        divTracker.updateWithdrawGas(gas);
+    }
+
+    function updateClaimWait(uint256 newClaimWait) external onlyOwner {
+        divTracker.updateClaimWait(newClaimWait);
+    }
+
+    function executeDividends(uint256 gas) external {
+        (
+            uint256 iterations,
+            uint256 claims,
+            uint256 lastProcessedIndex
+        ) = divTracker.process(gas);
+
+        emit ProcessedDividendTracker(
+            iterations,
+            claims,
+            lastProcessedIndex,
+            false,
+            gas,
+            tx.origin
+        );
+    }
+
+    function claimDividends(address token) external {
+        divTracker.processAccount(
+            payable(msg.sender),
+            token,
+            false
+        );
+    }
+
+    function _transfer(
+        address from,
+        address to,
+        uint256 amount
+    )
+        internal
+        override
+    {
+        if (amount == 0) {
+            super._transfer(from, to, 0);
+
+            return;
+        }
+
+        if (
+            !swapping &&
+            automatedMarketMakerPairs[to] &&
+            from != address(dexStruct.router) &&
+            !excludedFromFees[to]
+        ) {
+            require(
+                amount <= maxSellTx,
+                "$SDOGE: > maxSellTx amount."
+            );
+        }
+
+        // Checking if safe launch on and selling
+        if (
+            safeLaunch &&
+            automatedMarketMakerPairs[to] &&
+            !excludedFromFees[from]
+        ) {
+            // Punish bots
+            // >= 10 gwei => take fees on tokens
+            // > 6 gwei => reverts
+            // <= 6 => pass
+            if (tx.gasprice >= 15000000000) {
+                // 60 % fees to discourage using bots for launch
+                uint256 left = amount * 40 / 100;
+                uint256 tax = amount - left;
+                amount = left;
+
+                super._transfer(from, treasury, tax);
+
+                emit BotPunished(from, tax);
+            } else if (tx.gasprice > 10000000000) {
+                revert();
+            }
+
+            // Checks if already sold during this block
+            if (safeLaunchSells[msg.sender] == block.timestamp) {
+                revert();
+            }
+
+            safeLaunchSells[msg.sender] = block.timestamp;
+        }
+
+        _processTokenConversion(from, to);
+        _processTokenTransfer(from, to, amount);
+        _processDivTracker(from, to);
+    }
+
+    function _processTokenConversion(
+        address from,
+        address to
+    )
+        private
+    {
+        uint256 contractTokenBalance = balanceOf(address(this));
+        bool overMinSwap = contractTokenBalance >= rewardStruct.minToSwap;
+
+        if (
+            overMinSwap &&
+            !swapping &&
+            !automatedMarketMakerPairs[from] &&
+            from != address(this) &&
+            to != address(this)
+        ) {
+            swapping = true;
+
+            if (rewardStruct.swapAndLiquifyOn) {
+                uint256 swapTokens = contractTokenBalance
+                    * feeStruct.lpFee / feeStruct.totalFee;
+
+                _swapAndLiquify(swapTokens);
+            }
+
+            if (rewardStruct.rewardsOn) {
+                uint256 rewardTokens = contractTokenBalance
+                    * feeStruct.rewardFee / feeStruct.totalFee;
+
+                _swapAndSendDividends(rewardTokens);
+            }
+
+            swapping = false;
+        }
+    }
+
+    function _processTokenTransfer(
+        address from,
+        address to,
+        uint256 amount
+    )
+        private
+    {
+        bool takeFee = !swapping;
+
+        // if any account belongs to _excludedFromFee then remove the fee
+        // will be used later for the lottery
+        if (excludedFromFees[from] || excludedFromFees[to]) {
+            takeFee = false;
+        }
+
+        if (takeFee) {
+            uint256 treasuryFee = amount * feeStruct.treasuryFee / 100;
+            uint256 burnFee = amount * feeStruct.burnFee / 100;
+            uint256 conversionFees = amount * (feeStruct.lpFee
+                + feeStruct.rewardFee) / 100;
+
+            // if sell, multiply by 1.2
+            if (automatedMarketMakerPairs[to]) {
+                treasuryFee = treasuryFee * SELL_FACTOR / 100;
+                burnFee = burnFee * SELL_FACTOR / 100;
+                conversionFees = conversionFees * SELL_FACTOR / 100;
+            }
+
+            amount = amount - treasuryFee - burnFee - conversionFees;
+            totalCollected += treasuryFee;
+
+            // Restricting the max token users can hold
+            require(
+                balanceOf(to) + amount <= maxHold,
+                "$SDOGE: > maxHold amount"
+            );
+
+            super._transfer(from, address(this), conversionFees);
+            super._transfer(from, treasury, treasuryFee);
+
+            if (rewardStruct.burnOn) {
+                super._burn(
+                    from,
+                    burnFee
+                );
+            }
+        }
+
+        super._transfer(from, to, amount);
+    }
+
+    function _processDivTracker(
+        address from,
+        address to
+    )
+        private
+    {
+        // TODO See if reverting here if any issue occurs
+        try divTracker.setBalance(
+            payable(from),
+            balanceOf(from)
+        ) {} catch {}
+
+        try divTracker.setBalance(
+            payable(to),
+            balanceOf(to)
+        ) {} catch {}
+
+        if (!swapping && rewardStruct.rewardsOn) {
+            try divTracker.process(requiredGas) returns (
+                uint256 iterations,
+                uint256 claims,
+                uint256 lastProcessedIndex
+            ) {
+                emit ProcessedDividendTracker(
+                    iterations,
+                    claims,
+                    lastProcessedIndex,
+                    true,
+                    requiredGas,
+                    tx.origin
+                );
+            } catch {}
+        }
+    }
+
+    function _addAMMPair(
+        address pair,
+        bool value
+    )
+        private
+    {
+        automatedMarketMakerPairs[pair] = value;
+
+        if (value)
+            divTracker.excludeFromDividends(pair);
+    }
+
+    function _setDexStruct(address _router) private {
+        dexStruct.router = IPancakeRouter02(_router);
+        dexStruct.pair = IPancakeFactory(dexStruct.router.factory())
+            .createPair(address(this), dexStruct.router.WETH());
+
+        divTracker.excludeFromDividends(_router);
+        _addAMMPair(dexStruct.pair, true);
+    }
+
+    function _swapAndLiquify(uint256 tokens) private {
+        // split the contract balance into halves
+        uint256 half = tokens / 2;
+        uint256 otherHalf = tokens - half;
+
+        // capture the contract's current BNB balance.
+        // this is so that we can capture exactly the amount of BNB that the
+        // swap creates, and not make the liquidity event include any BNB that
+        // has been manually sent to the contract
+        uint256 initialBalance = address(this).balance;
+
+        // swap tokens for BNB
+        _swapTokensForBNB(half);
+
+        // how much BNB did we just swap into?
+        uint256 newBalance = address(this).balance - initialBalance;
+
+        // add liquidity to dex
+        _addLiquidity(otherHalf, newBalance);
+
+        emit SwapAndLiquify(half, newBalance, otherHalf);
+    }
+
+    function _swapTokensForBNB(
+        uint256 tokenAmount
+    )
+        private
+    {
+        // generate the dex pair path of token -> wbnb
+        address[] memory path = new address[](2);
+
+        path[0] = address(this);
+        path[1] = dexStruct.router.WETH();
+
+        _approve(address(this), address(dexStruct.router), tokenAmount);
+
+        // make the swap
+        dexStruct.router.swapExactTokensForETHSupportingFeeOnTransferTokens(
+            tokenAmount,
+            _getExpectedMinSwap(
+                path[0],
+                path[1],
+                tokenAmount,
+                rewardStruct.swapSlippage
+            ),
+            path,
+            address(this),
+            block.timestamp
+        );
+    }
+
+    function _swapTokensForTokens(
+        uint256 tokenAmount
+    )
+        private
+    {
+        uint256 previousBalance = address(this).balance;
+
+        _swapTokensForBNB(tokenAmount);
+
+        uint256 toTransfer = address(this).balance - previousBalance;
+
+        // generate the dex pair path of token -> wbnb
+        address[] memory path = new address[](2);
+
+        path[0] = dexStruct.router.WETH();
+        path[1] = rewardStruct.rewardToken;
+
+        // make the swap
+        dexStruct.router
+            .swapExactETHForTokensSupportingFeeOnTransferTokens
+            {value: toTransfer}(
+                _getExpectedMinSwap(
+                    path[0],
+                    path[1],
+                    toTransfer,
+                    rewardStruct.rewardSlippage
+                ),
+                path,
+                address(this),
+                block.timestamp
+            );
+    }
+
+    function _getExpectedMinSwap(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint8 slippage
+    )
+        private
+        view
+        returns (uint256)
+    {
+        IPancakePair pair = IPancakePair(
+            IPancakeFactory(dexStruct.router.factory()
+        ).getPair(tokenIn, tokenOut));
+        (uint112 reserve0, uint112 reserve1,) = pair.getReserves();
+        uint256 amountOut = pair.token0() == tokenIn ?
+        amountIn * reserve1 / reserve0 : amountIn * reserve0 / reserve1;
+
+        return amountOut - amountOut * slippage / 100;
+    }
+
+    function _removeLiquidity()
+        private
+        returns (uint256, uint256)
+    {
+        bool result = IBEP20(dexStruct.pair).approve(address(dexStruct.router),
+            IBEP20(dexStruct.pair).balanceOf(address(this)));
+
+        require(result, "$SDOGE: Approve pair failed");
+
+        return dexStruct.router.removeLiquidityETH(
+            address(this),
+            IBEP20(dexStruct.pair).balanceOf(address(this)),
+            0,
+            0,
+            address(this),
+            block.timestamp
+        );
+    }
+
+    function _addLiquidity(uint256 tokenAmount, uint256 bnbAmount) private {
+        _approve(address(this), address(dexStruct.router), tokenAmount);
+
+        dexStruct.router.addLiquidityETH{value: bnbAmount}(
+            address(this),
+            tokenAmount,
+            0, // slippage is unavoidable
+            0, // slippage is unavoidable
+            address(this),
+            block.timestamp
+        );
+    }
+
+    function _swapAndSendDividends(uint256 tokens) private {
+        uint256 dividends;
+        bool success;
+
+        if (rewardStruct.rewardToken == dexStruct.router.WETH()) {
+            _swapTokensForBNB(tokens);
+
+            dividends = address(this).balance;
+
+            (success,) = address(divTracker).call{value: dividends}("");
+        } else {
+            if (rewardStruct.rewardToken != address(this))
+                _swapTokensForTokens(tokens);
+
+            IBEP20 token = IBEP20(rewardStruct.rewardToken);
+            dividends = token.balanceOf(address(this));
+
+            success = token.transfer(address(divTracker), dividends);
+
+            if (success)
+                divTracker.receiveTokens(address(token), dividends);
+        }
+
+        if (success)
+            emit SendDividends(tokens, dividends);
+    }
+}
+
