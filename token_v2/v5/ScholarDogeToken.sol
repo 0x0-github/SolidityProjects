@@ -6,15 +6,8 @@ import "./ScholarDogeTeamTimelock.sol";
 import "./IPancakePair.sol";
 import "./ScholarDogeManager.sol";
 import "./BEP20.sol";
-import "./IterableMapping.sol";
 
 contract ScholarDogeToken is BEP20, ScholarDogeManager {
-    using IterableMapping for IterableMapping.Map;
-
-    uint256 constant internal magnitude = 2**128;
-    
-    IterableMapping.Map private tokenHoldersMap;
-    uint256 public lastProcessedIndex;
     
     uint256 public totalCollected;
     
@@ -23,26 +16,12 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
     bool private swapping;
     bool private shouldAddLp;
     bool private shouldReward;
-    
-    // Below are associated to the reward tokens (first key)
-    mapping(address => uint256) internal magnifiedDividendPerShare;
-    mapping(address => mapping(address => int256))
-        internal magnifiedDividendCorrections;
 
-    mapping(address => mapping(address => uint256))
-        internal withdrawnDividends;
-    mapping(address => uint256) internal totalDividendsDistributed;
-    
     mapping(address => bool) public automatedMarketMakerPairs;
     mapping(address => bool) public excludedFromFees;
-    mapping(address => bool) public excludedFromDividends;
 
-    mapping(address => mapping(address => uint256)) internal lastClaimTimes;
-    
     event ExcludeFromFees(address indexed _account, bool _excluded);
     
-    event ExcludeFromDividends(address indexed account);
-
     event SetAutomatedMarketMakerPair(
         address indexed _pair,
         bool _value
@@ -57,29 +36,15 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         uint256 addedBnb
     );
 
-    event SendDividends(
-        uint256 amount
-    );
-
-    event ProcessedDividendTracker(
-        uint256 iterations,
-        uint256 lastProcessedIndex,
-        uint256 gas
-    );
-    
-    event DividendWithdrawn(
-        address indexed token,
-        address indexed to,
-        uint256 amount
-    );
-    
-    event Claim(address indexed account, uint256 amount, bool indexed automatic);
+    event SendDividends(uint256 amount);
 
     constructor() BEP20("ScholarDoge", "$SDOGE") {
+        dividendManager = new ScholarDogeDividendManager(address(this));
         // TODO Exclude from dividends the deployer
-        _excludeFromDividends(address(this));
-        _excludeFromDividends(address(0x0));
-        _excludeFromDividends(address(dexStruct.router));
+        dividendManager.excludeFromDividends(address(this));
+        dividendManager.excludeFromDividends(address(0x0));
+        dividendManager.excludeFromDividends(address(dexStruct.router));
+        dividendManager.excludeFromDividends(address(dividendManager));
 
         _addAMMPair(dexStruct.pair, true);
 
@@ -90,28 +55,8 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         excludedFromFees[address(this)] = true;
         excludedFromFees[address(teamTimelock)] = true;
         excludedFromFees[owner()] = true;
-    }
-    
-    function _toUint256Safe(int256 a)
-        private
-        pure
-        returns (uint256)
-    {
-        require(a >= 0);
-
-        return uint256(a);
-    }
-    
-    function _toInt256Safe(uint256 a)
-        private
-        pure
-        returns (int256)
-    {
-        int256 b = int256(a);
-
-        require(b >= 0);
-
-        return b;
+        excludedFromFees[address(dividendManager)] = true;
+        
     }
 
     receive() external payable {
@@ -184,22 +129,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         onlyOwner
         safeContractUpdate(7, 3 days)
     {
-        _excludeFromDividends(account);
-
-        emit ExcludeFromDividends(account);
-    }
-    
-    function executeLiquidityMigration(address _router)
-        external
-        onlyOwner
-        safeContractUpdate(8, 15 days)
-    {
-        (uint256 tokenReceived, uint256 bnbReceived) = _removeLiquidity();
-
-        _setDexStruct(_router);
-        _addLiquidity(tokenReceived, bnbReceived);
-
-        emit MigrateLiquidity(_router);
+        dividendManager.excludeFromDividends(account);
     }
 
     function setAutomatedMarketMakerPair(
@@ -219,182 +149,23 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         emit SetAutomatedMarketMakerPair(_pair, value);
     }
     
-    function executeDividends() public {
-        (
-            uint256 iterations,
-            uint256 lastIndex
-        ) = process();
-
-        emit ProcessedDividendTracker(
-            iterations,
-            lastIndex,
-            claimGas
-        );
-    }
-
-    function claimDividends(address token) external {
-        _processAccount(
-            msg.sender,
-            token,
-            false
-        );
-    }
-    
-    function withdrawableDividendOf(address _owner, address _token)
-        public
-        view
-        returns (uint256)
+    function executeLiquidityMigration(address _router)
+        external
+        onlyOwner
+        safeContractUpdate(5, 15 days)
     {
-        return accumulativeDividendOf(_owner, _token)
-            - withdrawnDividends[_token][_owner];
-    }
-    
-    function withdrawnDividendOf(address _owner, address _token)
-        public
-        view
-        returns (uint256)
-    {
-        return withdrawnDividends[_token][_owner];
-    }
+        (uint256 tokenReceived, uint256 bnbReceived) = _removeLiquidity();
 
-    function accumulativeDividendOf(address _owner, address _token)
-        public
-        view
-        returns (uint256)
-    {
-        return _toUint256Safe(_toInt256Safe(magnifiedDividendPerShare[_token]
-            * balanceOf(_owner)) + magnifiedDividendCorrections[_token][_owner])
-            / magnitude;
-    }
+        _setDexStruct(_router);
+        _addLiquidity(tokenReceived, bnbReceived);
 
-    function getNumberOfTokenHolders() external view returns (uint256) {
-        return tokenHoldersMap.keys.length;
-    }
-    
-    function getAccount(address _account, address _token)
-        public
-        view
-        returns (
-            address account,
-            int256 index,
-            int256 iterationsUntilProcessed,
-            uint256 withdrawableDividends,
-            uint256 totalDividends,
-            uint256 lastClaimTime,
-            uint256 nextClaimTime,
-            uint256 secondsUntilAutoClaimAvailable
-        )
-    {
-        account = _account;
-        index = tokenHoldersMap.getIndexOfKey(account);
-
-        iterationsUntilProcessed = -1;
-
-        if (index >= 0) {
-            if (uint256(index) > lastProcessedIndex) {
-                iterationsUntilProcessed = index - int256(lastProcessedIndex);
-            } else {
-                uint256 processesUntilEndOfArray
-                    = tokenHoldersMap.keys.length > lastProcessedIndex ?
-                        tokenHoldersMap.keys.length - lastProcessedIndex : 0;
-
-                iterationsUntilProcessed
-                    = index + int256(processesUntilEndOfArray);
-            }
-        }
-
-        withdrawableDividends
-            = withdrawableDividendOf(account, _token);
-        totalDividends
-            = accumulativeDividendOf(account, _token);
-        lastClaimTime = lastClaimTimes[_token][account];
-        nextClaimTime = lastClaimTime > 0 ? lastClaimTime + claimWait : 0;
-        secondsUntilAutoClaimAvailable = nextClaimTime > block.timestamp ?
-            nextClaimTime - block.timestamp : 0;
-    }
-    
-    function process() public returns (uint256, uint256) {
-        uint256 numberOfTokenHolders = tokenHoldersMap.keys.length;
-        uint256 gasLeft = gasleft();
-
-        if (numberOfTokenHolders == 0)
-            return (0, lastProcessedIndex);
-
-        uint256 gasUsed = 0;
-        uint256 iterations = 0;
-        uint256 _lastProcessedIndex = lastProcessedIndex;
-        address rewardToken = rewardStruct.rewardToken;
-
-        while (gasUsed < claimGas && iterations < numberOfTokenHolders) {
-            _lastProcessedIndex++;
-
-            if (_lastProcessedIndex >= tokenHoldersMap.keys.length)
-                _lastProcessedIndex = 0;
-
-            address account = tokenHoldersMap.keys[_lastProcessedIndex];
-
-            if (_canAutoClaim(lastClaimTimes[rewardToken][account]))
-                _processAccount(account, rewardToken, true);
-
-            iterations++;
-
-            uint256 newGasLeft = gasleft();
-
-            if (gasLeft > newGasLeft)
-                gasUsed = gasUsed + gasLeft - newGasLeft;
-
-            gasLeft = newGasLeft;
-        }
-        
-        lastProcessedIndex = _lastProcessedIndex;
-
-        return (iterations, lastProcessedIndex);
-    }
-    
-    function _processAccount(
-        address account,
-        address token,
-        bool automatic
-    )
-        private
-        returns (bool)
-    {
-        uint256 amount = _withdrawDividendOfUser(account, token);
-
-        if (amount > 0) {
-            lastClaimTimes[token][account] = block.timestamp;
-
-            emit Claim(account, amount, automatic);
-
-            return true;
-        }
-
-        return false;
-    }
-    
-    function _excludeFromDividends(address account) private {
-        require(!excludedFromDividends[account]);
-
-        excludedFromDividends[account] = true;
-
-        magnifiedDividendCorrections[rewardStruct.rewardToken][account]
-            += _toInt256Safe(magnifiedDividendPerShare[account]
-                * balanceOf(account));
-        tokenHoldersMap.remove(account);
-    }
-
-    function _canAutoClaim(uint256 lastClaimTime) private view returns (bool) {
-        if (lastClaimTime > block.timestamp)  {
-            return false;
-        }
-
-        return block.timestamp - lastClaimTime >= claimWait;
+        emit MigrateLiquidity(_router);
     }
     
     function _setDexStruct(address _router) override internal {
         super._setDexStruct(_router);
 
-        _excludeFromDividends(_router);
+        dividendManager.excludeFromDividends(_router);
         _addAMMPair(dexStruct.pair, true);
     }
     
@@ -406,36 +177,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         private
     {
         super._transfer(from, to, amount);
-        
-        int256 _magCorrection = _toInt256Safe(
-            magnifiedDividendPerShare[rewardStruct.rewardToken] * amount);
-        
-        if (!excludedFromDividends[from]) {
-            magnifiedDividendCorrections[rewardStruct.rewardToken][from]
-                += _magCorrection;
-                
-            _processBalance(from);
-        }
-        
-        if (!excludedFromDividends[to]) {
-            magnifiedDividendCorrections[rewardStruct.rewardToken][to]
-                -= _magCorrection;
-                
-            _processBalance(to);
-        }
-    }
-    
-    function _processBalance(address account) private {
-        uint256 balance = balanceOf(account);
-        
-        if (balance > minTokensForDividends) {
-            tokenHoldersMap.set(account, balance);
-            
-            if (feeStruct.rewardFee > 0)
-                _processAccount(account, rewardStruct.rewardToken, true);
-        } else {
-            tokenHoldersMap.remove(account);
-        }
+        dividendManager.updateShareAndTransfer(from, to, amount);
     }
 
     function _transfer(
@@ -446,8 +188,6 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         internal
         override
     {
-        uint256 txGasLimit = gasleft();
-        
         if (amount == 0) {
             _updateShareAndTransfer(from, to, 0);
 
@@ -475,7 +215,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
             }
     
             // Checks if already sold during this block
-            if (!swapping && safeLaunchSells[msg.sender] == block.timestamp) {
+            if (safeLaunchSells[msg.sender] == block.timestamp) {
                 revert();
             }
     
@@ -493,34 +233,23 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         }
 
         _processTokensTransfer(from, to, amount);
+        _processTokenConversion(from);
         
-        bool processed = false;
-        
-        if (txGasLimit >= swapGas)
-            processed = _processTokenConversion(from);
-        
-        if (!swapping && !processed && txGasLimit >= claimGas && feeStruct.rewardFee > 0)
-            executeDividends();
+        if (!swapping && feeStruct.rewardFee > 0) {
+            try dividendManager.process(claimGas) {} catch {}
+        }
     }
 
-    function _processTokenConversion(address from)
-        private
-        returns (bool)
-    {
+    function _processTokenConversion(address from) private {
         uint256 contractTokenBalance = balanceOf(address(this));
         bool overMinSwap = contractTokenBalance >= rewardStruct.minToSwap;
-        bool processed = false;
         
-        if (overMinSwap && !shouldAddLp && !shouldReward) {
+        if (overMinSwap) {
             shouldAddLp = feeStruct.lpFee > 0;
             shouldReward = feeStruct.rewardFee > 0;
         }
         
-        if (
-            !automatedMarketMakerPairs[from] &&
-            !swapping
-        ) {
-            // Slipts in order to avoid too much gas on transfer
+        if (!automatedMarketMakerPairs[from] && !swapping) {
             if (shouldAddLp) {
                 swapping = true;
                 shouldAddLp = false;
@@ -529,8 +258,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
                     * feeStruct.lpFee / (feeStruct.lpFee + feeStruct.rewardFee);
     
                 _swapAndLiquify(swapTokens);
-                
-                processed = true;
+    
                 swapping = false;
             } else if (shouldReward) {
                 swapping = true;
@@ -541,12 +269,9 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
     
                 _swapAndSendDividends(rewardTokens);
                 
-                processed = true;
                 swapping = false;
             }
         }
-        
-        return processed;
     }
 
     function _processTokensTransfer(
@@ -623,40 +348,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
 
         emit SwapAndLiquify(half, newBalance);
     }
-
-    function _withdrawDividendOfUser(address _user, address _token)
-        internal
-        returns (uint256)
-    {
-        uint256 _withdrawableDividend = withdrawableDividendOf(_user, _token);
     
-        if (_withdrawableDividend > 0) {
-            withdrawnDividends[_token][_user] += _withdrawableDividend;
-      
-            emit DividendWithdrawn(_token, _user, _withdrawableDividend);
-            
-            bool success;
-        
-            if (_token == wbnb()) {
-                (success,) = _user.call{
-                    value: _withdrawableDividend
-                }("");
-            } else {
-                success = BEP20(_token).transfer(_user, _withdrawableDividend);
-            }
-    
-            if (!success) {
-                withdrawnDividends[_token][_user] -= _withdrawableDividend;
-            
-                return 0;
-            }
-    
-            return _withdrawableDividend;
-        }
-
-        return 0;
-    }
-
     function _addAMMPair(
         address pair,
         bool value
@@ -666,7 +358,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         automatedMarketMakerPairs[pair] = value;
 
         if (value)
-            _excludeFromDividends(pair);
+            dividendManager.excludeFromDividends(pair);
     }
     
     function _swapTokensForBnb(
@@ -734,7 +426,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         address tokenIn,
         address tokenOut,
         uint256 amountIn,
-        uint256 slippage
+        uint8 slippage
     )
         private
         view
@@ -785,26 +477,25 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
     
     function _swapAndSendDividends(uint256 tokens) private {
         uint256 dividends;
+        bool success;
+
 
         if (rewardStruct.rewardToken == wbnb()) {
             _swapTokensForBnb(tokens);
 
             dividends = address(this).balance;
+            (success,) = address(dividendManager).call{value: dividends}("");
         } else {
             if (rewardStruct.rewardToken != address(this))
                 _swapTokensForTokens(tokens);
 
             IBEP20 token = IBEP20(rewardStruct.rewardToken);
             dividends = token.balanceOf(address(this));
-        }
+            success = token.transfer(address(dividendManager), dividends);
 
-        if (dividends > 0) {
-            magnifiedDividendPerShare[rewardStruct.rewardToken] += 
-                dividends * magnitude / totalSupply();
-            totalDividendsDistributed[rewardStruct.rewardToken] += dividends;
+            if (success)
+                dividendManager.receiveTokens(address(token), dividends);
         }
-        
-        emit SendDividends(dividends);
     }
 }
 
