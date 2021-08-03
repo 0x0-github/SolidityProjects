@@ -6,14 +6,14 @@ import "./ScholarDogeTeamTimelock.sol";
 import "./IPancakePair.sol";
 import "./ScholarDogeManager.sol";
 import "./BEP20.sol";
-import "./IterableMapping.sol";
+import "./EnumerableMap.sol";
 
 contract ScholarDogeToken is BEP20, ScholarDogeManager {
-    using IterableMapping for IterableMapping.Map;
+    using EnumerableMap for EnumerableMap.Map;
 
     uint256 constant internal magnitude = 2**128;
     
-    IterableMapping.Map private tokenHoldersMap;
+    EnumerableMap.Map private tokenHoldersMap;
     uint256 public lastProcessedIndex;
     
     uint256 public totalCollected;
@@ -268,7 +268,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
     }
 
     function getNumberOfTokenHolders() external view returns (uint256) {
-        return tokenHoldersMap.keys.length;
+        return tokenHoldersMap.length();
     }
     
     function getAccount(address _account, address _token)
@@ -286,7 +286,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         )
     {
         account = _account;
-        index = tokenHoldersMap.getIndexOfKey(account);
+        index = tokenHoldersMap.indexOfKey(account);
 
         iterationsUntilProcessed = -1;
 
@@ -295,8 +295,8 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
                 iterationsUntilProcessed = index - int256(lastProcessedIndex);
             } else {
                 uint256 processesUntilEndOfArray
-                    = tokenHoldersMap.keys.length > lastProcessedIndex ?
-                        tokenHoldersMap.keys.length - lastProcessedIndex : 0;
+                    = tokenHoldersMap.length() > lastProcessedIndex ?
+                        tokenHoldersMap.length() - lastProcessedIndex : 0;
 
                 iterationsUntilProcessed
                     = index + int256(processesUntilEndOfArray);
@@ -314,7 +314,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
     }
     
     function process() public returns (uint256, uint256) {
-        uint256 numberOfTokenHolders = tokenHoldersMap.keys.length;
+        uint256 numberOfTokenHolders = tokenHoldersMap.length();
         uint256 gasLeft = gasleft();
 
         if (numberOfTokenHolders == 0)
@@ -328,10 +328,10 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         while (gasUsed < claimGas && iterations < numberOfTokenHolders) {
             _lastProcessedIndex++;
 
-            if (_lastProcessedIndex >= tokenHoldersMap.keys.length)
+            if (_lastProcessedIndex >= tokenHoldersMap.length())
                 _lastProcessedIndex = 0;
 
-            address account = tokenHoldersMap.keys[_lastProcessedIndex];
+            (address account,) = tokenHoldersMap.at(_lastProcessedIndex);
 
             if (_canAutoClaim(lastClaimTimes[rewardToken][account]))
                 _processAccount(account, rewardToken, true);
