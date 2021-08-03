@@ -328,7 +328,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         while (gasUsed < claimGas && iterations < numberOfTokenHolders) {
             _lastProcessedIndex++;
 
-            if (_lastProcessedIndex >= tokenHoldersMap.length())
+            if (_lastProcessedIndex >= numberOfTokenHolders)
                 _lastProcessedIndex = 0;
 
             (address account,) = tokenHoldersMap.at(_lastProcessedIndex);
@@ -446,7 +446,8 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         internal
         override
     {
-        uint256 txGasLimit = gasleft();
+        // Trick to avoid out of gas
+        require(swapping || gasleft() > minTxGas);
         
         if (amount == 0) {
             _updateShareAndTransfer(from, to, 0);
@@ -494,12 +495,9 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
 
         _processTokensTransfer(from, to, amount);
         
-        bool processed = false;
-        
-        if (txGasLimit >= swapGas)
-            processed = _processTokenConversion(from);
-        
-        if (!swapping && !processed && txGasLimit >= claimGas && feeStruct.rewardFee > 0)
+        bool processed = _processTokenConversion(from);
+
+        if (!swapping && !processed && feeStruct.rewardFee > 0)
             executeDividends();
     }
 
@@ -693,7 +691,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
             ),
             path,
             address(this),
-            block.timestamp
+            block.timestamp + 5 minutes
         );
     }
     
@@ -726,7 +724,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
                 ),
                 path,
                 address(this),
-                block.timestamp
+                block.timestamp + 5 minutes
             );
     }
 
@@ -766,7 +764,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
             0,
             0,
             address(this),
-            block.timestamp
+            block.timestamp + 5 minutes
         );
     }
 
@@ -779,7 +777,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
             0, // slippage is unavoidable
             0, // slippage is unavoidable
             address(this),
-            block.timestamp
+            block.timestamp + 5 minutes
         );
     }
     

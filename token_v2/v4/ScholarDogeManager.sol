@@ -39,11 +39,12 @@ abstract contract ScholarDogeManager is Ownable {
     
     bool public init;
     
-    // use by default 400,000 gas to process auto-claiming dividends
-    uint256 internal claimGas = 400000;
+    // use by default 250,000 gas to process auto-claiming dividends
+    uint256 internal claimGas = 250000;
     
-    // use by default 600,000 gas to process token swap / add lp
-    uint256 internal swapGas = 600000;
+    // use by default 800,000 gas to process transfer
+    // avoids out of gas exception, extra gas will be refunded
+    uint256 internal minTxGas = 800000;
     
     uint256 public claimWait;
     uint256 public minTokensForDividends;
@@ -99,7 +100,7 @@ abstract contract ScholarDogeManager is Ownable {
     
     event ClaimGasUpdated(uint256 newValue);
     
-    event SwapGasUpdated(uint256 newValue);
+    event MinTxGasUpdated(uint256 newValue);
     
     event RewardTokenAdded(address rewardToken);
 
@@ -352,10 +353,10 @@ abstract contract ScholarDogeManager is Ownable {
         emit ClaimGasUpdated(newValue);
     }
     
-    function updateSwapGas(uint256 newValue) external onlyOwner {
-        swapGas = newValue;
+    function updateMinTxGas(uint256 newValue) external onlyOwner {
+        minTxGas = newValue;
 
-        emit SwapGasUpdated(newValue);
+        emit MinTxGasUpdated(newValue);
     }
     
     function _setDexStruct(address _router) virtual internal {
