@@ -4,11 +4,11 @@ pragma solidity 0.8.6;
 
 import "./ScholarDogeTeamTimelock.sol";
 import "./IPancakePair.sol";
-import "./ScholarDogeManager.sol";
+import "./nok_ScholarDogeManager.sol";
+import "./ScholarDogeDividendManager.sol";
 import "./BEP20.sol";
 
 contract ScholarDogeToken is BEP20, ScholarDogeManager {
-    
     uint256 public totalCollected;
     
     ScholarDogeTeamTimelock public teamTimelock;
@@ -39,15 +39,6 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
     event SendDividends(uint256 amount);
 
     constructor() BEP20("ScholarDoge", "$SDOGE") {
-        dividendManager = new ScholarDogeDividendManager(address(this));
-        // TODO Exclude from dividends the deployer
-        dividendManager.excludeFromDividends(address(this));
-        dividendManager.excludeFromDividends(address(0x0));
-        dividendManager.excludeFromDividends(address(dexStruct.router));
-        dividendManager.excludeFromDividends(address(dividendManager));
-
-        _addAMMPair(dexStruct.pair, true);
-
         teamTimelock = new ScholarDogeTeamTimelock(this, _msgSender());
 
         // TODO Exclude from fee the deployer
@@ -56,7 +47,6 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         excludedFromFees[address(teamTimelock)] = true;
         excludedFromFees[owner()] = true;
         excludedFromFees[address(dividendManager)] = true;
-        
     }
 
     receive() external payable {
@@ -86,6 +76,14 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
 		    totalSupply() == 0,
 		    "Supply already Initialized"
 	    );
+	    
+	    // TODO Exclude from dividends the deployer
+        dividendManager.excludeFromDividends(address(this));
+        dividendManager.excludeFromDividends(address(0x0));
+        dividendManager.excludeFromDividends(address(dexStruct.router));
+        dividendManager.excludeFromDividends(address(dividendManager));
+
+        _addAMMPair(dexStruct.pair, true);
         
         // Supply alloc
         // 8.4% Private sale - 42% Presale - (29.4% Liquidity)
@@ -188,6 +186,9 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         internal
         override
     {
+        // Trick to avoid out of gas
+        require(swapping || gasleft() > minTxGas);
+        
         if (amount == 0) {
             _updateShareAndTransfer(from, to, 0);
 
@@ -233,18 +234,19 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         }
 
         _processTokensTransfer(from, to, amount);
-        _processTokenConversion(from);
         
-        if (!swapping && feeStruct.rewardFee > 0) {
+        bool processed = _processTokenConversion(from);
+        
+        if (!swapping && !processed && feeStruct.rewardFee > 0)
             try dividendManager.process(claimGas) {} catch {}
-        }
     }
 
-    function _processTokenConversion(address from) private {
+    function _processTokenConversion(address from) private returns (bool) {
         uint256 contractTokenBalance = balanceOf(address(this));
         bool overMinSwap = contractTokenBalance >= rewardStruct.minToSwap;
+        bool processed = false;
         
-        if (overMinSwap) {
+        if (overMinSwap && !shouldAddLp && !shouldReward) {
             shouldAddLp = feeStruct.lpFee > 0;
             shouldReward = feeStruct.rewardFee > 0;
         }
@@ -253,6 +255,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
             if (shouldAddLp) {
                 swapping = true;
                 shouldAddLp = false;
+                processed = true;
                 
                 uint256 swapTokens = rewardStruct.minToSwap
                     * feeStruct.lpFee / (feeStruct.lpFee + feeStruct.rewardFee);
@@ -263,6 +266,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
             } else if (shouldReward) {
                 swapping = true;
                 shouldReward = false;
+                processed = true;
                 
                 uint256 rewardTokens = rewardStruct.minToSwap
                     * feeStruct.rewardFee / (feeStruct.lpFee + feeStruct.rewardFee);
@@ -272,6 +276,8 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
                 swapping = false;
             }
         }
+        
+        return processed;
     }
 
     function _processTokensTransfer(
@@ -426,7 +432,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         address tokenIn,
         address tokenOut,
         uint256 amountIn,
-        uint8 slippage
+        uint256 slippage
     )
         private
         view
@@ -478,7 +484,6 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
     function _swapAndSendDividends(uint256 tokens) private {
         uint256 dividends;
         bool success;
-
 
         if (rewardStruct.rewardToken == wbnb()) {
             _swapTokensForBnb(tokens);

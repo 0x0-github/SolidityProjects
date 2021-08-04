@@ -3,16 +3,15 @@
 pragma solidity 0.8.6;
 
 import "./Ownable.sol";
-import "./IterableMapping.sol";
-import "./IBEP20.sol";
+import "./EnumerableMap.sol";
 import "./IScholarDogeToken.sol";
 
 contract ScholarDogeDividendManager is Ownable {
-    using IterableMapping for IterableMapping.Map;
+    using EnumerableMap for EnumerableMap.Map;
 
     uint256 constant internal magnitude = 2**128;
     
-    IterableMapping.Map private tokenHoldersMap;
+    EnumerableMap.Map private tokenHoldersMap;
     uint256 public lastProcessedIndex;
     
     uint32 public claimWait;
@@ -22,11 +21,9 @@ contract ScholarDogeDividendManager is Ownable {
     
     // Below are associated to the reward tokens (first key)
     mapping(address => uint256) internal magnifiedDividendPerShare;
-    mapping(address => mapping(address => int256))
-        internal magnifiedDividendCorrections;
+    mapping(address => int256) internal magnifiedDividendCorrections;
 
-    mapping(address => mapping(address => uint256))
-        internal withdrawnDividends;
+    mapping(address => mapping(address => uint256)) internal withdrawnDividends;
     mapping(address => uint256) internal totalDividendsDistributed;
     
     mapping(address => bool) public excludedFromDividends;
@@ -82,7 +79,7 @@ contract ScholarDogeDividendManager is Ownable {
     {
         require(_min > 0, "min == 0");
         require(
-            _min <= IBEP20(owner()).totalSupply() / 100,
+            _min <= sdoge.totalSupply() / 100,
             "min > 1% supply"
         );
         
@@ -106,14 +103,7 @@ contract ScholarDogeDividendManager is Ownable {
         external
         onlyOwner
     {
-        require(!excludedFromDividends[account]);
-
-        excludedFromDividends[account] = true;
-
-        magnifiedDividendCorrections[sdoge.rewardToken()][account]
-            += _toInt256Safe(magnifiedDividendPerShare[account]
-                * IBEP20(owner()).balanceOf(account));
-        tokenHoldersMap.remove(account);
+        _excludeFromDividends(account);
 
         emit ExcludeFromDividends(account);
     }
@@ -136,8 +126,10 @@ contract ScholarDogeDividendManager is Ownable {
         view
         returns (uint256)
     {
-        return accumulativeDividendOf(_owner, _token)
-            - withdrawnDividends[_token][_owner];
+        int256 withdrawable = int256(accumulativeDividendOf(_owner, _token))
+            - int256(withdrawnDividends[_token][_owner]);
+            
+        return withdrawable > 0 ? uint256(withdrawable) : 0;
     }
     
     function withdrawnDividendOf(address _owner, address _token)
@@ -153,13 +145,13 @@ contract ScholarDogeDividendManager is Ownable {
         view
         returns (uint256)
     {
-        return _toUint256Safe(_toInt256Safe(magnifiedDividendPerShare[_token]
-            * IBEP20(owner()).balanceOf(_owner))
-            + magnifiedDividendCorrections[_token][_owner]) / magnitude;
+        return uint256(int256(magnifiedDividendPerShare[_token]
+            * sdoge.balanceOf(_owner))
+            + magnifiedDividendCorrections[_owner]) / magnitude;
     }
 
     function getNumberOfTokenHolders() external view returns (uint256) {
-        return tokenHoldersMap.keys.length;
+        return tokenHoldersMap.length();
     }
     
     function getAccount(address _account, address _token)
@@ -177,7 +169,7 @@ contract ScholarDogeDividendManager is Ownable {
         )
     {
         account = _account;
-        index = tokenHoldersMap.getIndexOfKey(account);
+        index = tokenHoldersMap.indexOfKey(account);
 
         iterationsUntilProcessed = -1;
 
@@ -186,8 +178,8 @@ contract ScholarDogeDividendManager is Ownable {
                 iterationsUntilProcessed = index - int256(lastProcessedIndex);
             } else {
                 uint256 processesUntilEndOfArray
-                    = tokenHoldersMap.keys.length > lastProcessedIndex ?
-                        tokenHoldersMap.keys.length - lastProcessedIndex : 0;
+                    = tokenHoldersMap.length() > lastProcessedIndex ?
+                        tokenHoldersMap.length() - lastProcessedIndex : 0;
 
                 iterationsUntilProcessed
                     = index + int256(processesUntilEndOfArray);
@@ -207,7 +199,7 @@ contract ScholarDogeDividendManager is Ownable {
     function process(uint256 claimGas)
         external
     {
-        uint256 numberOfTokenHolders = tokenHoldersMap.keys.length;
+        uint256 numberOfTokenHolders = tokenHoldersMap.length();
         uint256 gasLeft = gasleft();
 
         if (numberOfTokenHolders == 0)
@@ -221,10 +213,10 @@ contract ScholarDogeDividendManager is Ownable {
         while (gasUsed < claimGas && iterations < numberOfTokenHolders) {
             _lastProcessedIndex++;
 
-            if (_lastProcessedIndex >= tokenHoldersMap.keys.length)
+            if (_lastProcessedIndex >= tokenHoldersMap.length())
                 _lastProcessedIndex = 0;
 
-            address account = tokenHoldersMap.keys[_lastProcessedIndex];
+            (address account,) = tokenHoldersMap.at(_lastProcessedIndex);
 
             if (_canAutoClaim(lastClaimTimes[rewardToken][account]))
                 _processAccount(account, rewardToken);
@@ -253,19 +245,17 @@ contract ScholarDogeDividendManager is Ownable {
         onlyOwner
     {
         address rewardToken = sdoge.rewardToken();
-        int256 _magCorrection = _toInt256Safe(
+        int256 _magCorrection = int256(
             magnifiedDividendPerShare[rewardToken] * amount);
         
         if (!excludedFromDividends[from]) {
-            magnifiedDividendCorrections[rewardToken][from]
-                += _magCorrection;
+            magnifiedDividendCorrections[from] += _magCorrection;
                 
             _processBalance(from, rewardToken);
         }
         
         if (!excludedFromDividends[to]) {
-            magnifiedDividendCorrections[rewardToken][to]
-                -= _magCorrection;
+            magnifiedDividendCorrections[to] -= _magCorrection;
                 
             _processBalance(to, rewardToken);
         }
@@ -287,28 +277,6 @@ contract ScholarDogeDividendManager is Ownable {
         }
     }
     
-    function _toUint256Safe(int256 a)
-        private
-        pure
-        returns (uint256)
-    {
-        require(a >= 0);
-
-        return uint256(a);
-    }
-    
-    function _toInt256Safe(uint256 a)
-        private
-        pure
-        returns (int256)
-    {
-        int256 b = int256(a);
-
-        require(b >= 0);
-
-        return b;
-    }
-    
     function _distributeDividends(
         address token,
         uint256 amount
@@ -317,7 +285,7 @@ contract ScholarDogeDividendManager is Ownable {
     {
         if (amount > 0) {
             magnifiedDividendPerShare[token] += 
-                amount * magnitude / IBEP20(owner()).totalSupply();
+                amount * magnitude / sdoge.totalSupply();
             totalDividendsDistributed[token] += amount;
             
             emit DividendsDistributed(token, amount);
@@ -378,5 +346,17 @@ contract ScholarDogeDividendManager is Ownable {
         }
 
         return block.timestamp - lastClaimTime >= claimWait;
+    }
+    
+    function _excludeFromDividends(address account) private {
+        require(!excludedFromDividends[account]);
+
+        excludedFromDividends[account] = true;
+
+        magnifiedDividendCorrections[account]
+            += int256(magnifiedDividendPerShare[sdoge.rewardToken()]
+                * sdoge.balanceOf(account));
+        
+        tokenHoldersMap.remove(account);
     }
 }

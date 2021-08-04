@@ -114,7 +114,9 @@ abstract contract ScholarDogeManager is Ownable {
 
     // Adds a security on sensible contract updates
     modifier safeContractUpdate(uint8 fnNb, uint256 delay) {
-        if (init) {
+        // TODO remove here
+        _;
+        /*if (init) {
             if (pendingContractUpdates[fnNb] == 0) {
                 pendingContractUpdates[fnNb] = block.timestamp + delay;
     
@@ -133,7 +135,7 @@ abstract contract ScholarDogeManager is Ownable {
             }
         } else {
             _;
-        }
+        }*/
         
     }
     
@@ -156,7 +158,7 @@ abstract contract ScholarDogeManager is Ownable {
             .createPair(address(this), dexStruct.router.WETH());
         rewardStruct.rewardToken = dexStruct.router.WETH();
         
-        addRewardToken(dexStruct.router.WETH());
+        _addRewardToken(dexStruct.router.WETH());
         
         claimWait = 60;//3600;
         //must hold 10000+ tokens
@@ -310,7 +312,7 @@ abstract contract ScholarDogeManager is Ownable {
         rewardStruct.swapSlippage = _swapSlippage;
         rewardStruct.rewardSlippage = _rewardSlippage;
         
-        addRewardToken(_rewardToken);
+        _addRewardToken(_rewardToken);
 
         emit RewardStructUpdated(
             _minToSwap,
@@ -318,16 +320,6 @@ abstract contract ScholarDogeManager is Ownable {
             _swapSlippage,
             _rewardSlippage
         );
-    }
-    
-    function addRewardToken(address _token) public onlyOwner {
-        if (!addedTokens[_token]) {
-            addedTokens[_token] = true;
-            rewardTokens.push(_token);
-            rewardTokenCount++;
-        
-            emit RewardTokenAdded(_token);
-        }
     }
 
     function updateClaimWait(uint256 newClaimWait) external onlyOwner {
@@ -357,6 +349,16 @@ abstract contract ScholarDogeManager is Ownable {
         minTxGas = newValue;
 
         emit MinTxGasUpdated(newValue);
+    }
+    
+    function _addRewardToken(address _token) internal {
+        if (!addedTokens[_token]) {
+            addedTokens[_token] = true;
+            rewardTokens.push(_token);
+            rewardTokenCount++;
+        
+            emit RewardTokenAdded(_token);
+        }
     }
     
     function _setDexStruct(address _router) virtual internal {
