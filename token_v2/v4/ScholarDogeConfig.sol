@@ -6,7 +6,7 @@ import "./IPancakeRouter02.sol";
 import "./IPancakeFactory.sol";
 import "./Ownable.sol";
 
-abstract contract ScholarDogeManager is Ownable {
+abstract contract ScholarDogeConfig is Ownable {
     struct FeeStruct {
         uint256 rewardFee;
         uint256 lpFee;
@@ -304,7 +304,6 @@ abstract contract ScholarDogeManager is Ownable {
         uint256 _rewardSlippage
     )
         external
-        virtual
         onlyOwner
     {
         rewardStruct.minToSwap = _minToSwap;

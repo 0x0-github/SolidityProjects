@@ -4,11 +4,11 @@ pragma solidity 0.8.6;
 
 import "./ScholarDogeTeamTimelock.sol";
 import "./IPancakePair.sol";
-import "./ScholarDogeManager.sol";
+import "./ScholarDogeConfig.sol";
 import "./BEP20.sol";
 import "./EnumerableMap.sol";
 
-contract ScholarDogeToken is BEP20, ScholarDogeManager {
+contract ScholarDogeToken is BEP20, ScholarDogeConfig {
     using EnumerableMap for EnumerableMap.Map;
     
     uint256 constant internal MAGNITUDE = 2**128;
