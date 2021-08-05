@@ -11,12 +11,12 @@ import "./EnumerableMap.sol";
 contract ScholarDogeToken is BEP20, ScholarDogeManager {
     using EnumerableMap for EnumerableMap.Map;
     
-    uint256 constant internal magnitude = 2**128;
+    uint256 constant internal MAGNITUDE = 2**128;
     
     EnumerableMap.Map private tokenHoldersMap;
     uint256 public lastProcessedIndex;
     
-    uint256 public totalCollected;
+    uint256 public treasuryFeeCollected;
     
     ScholarDogeTeamTimelock public teamTimelock;
 
@@ -24,13 +24,11 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
     bool private shouldAddLp;
     bool private shouldReward;
     
-    // Below are associated to the reward tokens (first key)
     mapping(address => uint256) public magnifiedDividendPerShare;
     mapping(address => mapping(address => int256))
-        public magnifiedDividendCorrections;
+        internal magnifiedDividendCorrections;
 
-    mapping(address => mapping(address => uint256))
-        public withdrawnDividends;
+    mapping(address => mapping(address => uint256)) public withdrawnDividends;
     mapping(address => uint256) private totalDividendsDistributed;
     
     mapping(address => bool) private automatedMarketMakerPairs;
@@ -90,28 +88,6 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         excludedFromFees[address(this)] = true;
         excludedFromFees[address(teamTimelock)] = true;
         excludedFromFees[owner()] = true;
-    }
-    
-    function _toUint256Safe(int256 a)
-        private
-        pure
-        returns (uint256)
-    {
-        require(a >= 0);
-
-        return uint256(a);
-    }
-    
-    function _toInt256Safe(uint256 a)
-        private
-        pure
-        returns (int256)
-    {
-        int256 b = int256(a);
-
-        require(b >= 0);
-
-        return b;
     }
 
     receive() external payable {
@@ -218,19 +194,6 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
 
         emit SetAutomatedMarketMakerPair(_pair, value);
     }
-    
-    function executeDividends() public {
-        (
-            uint256 iterations,
-            uint256 lastIndex
-        ) = process();
-
-        emit ProcessedDividendTracker(
-            iterations,
-            lastIndex,
-            claimGas
-        );
-    }
 
     function claimDividends(address token) external {
         _processAccount(
@@ -245,9 +208,9 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         returns (uint256)
     {
         return accumulativeDividendOf(_owner, _token)
-            - withdrawnDividends[_token][_owner];
+                - withdrawnDividends[_token][_owner];
     }
-    
+
     function withdrawnDividendOf(address _owner, address _token)
         public
         view
@@ -261,11 +224,13 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         view
         returns (uint256)
     {
-        return _toUint256Safe(
-            _toInt256Safe(
-                magnifiedDividendPerShare[_token] * balanceOf(_owner)
-            ) + magnifiedDividendCorrections[_token][_owner]
-        ) / magnitude;
+        return (_token == rewardStruct.rewardToken) ? 
+            uint256(
+                int256(magnifiedDividendPerShare[_token] * balanceOf(_owner))
+                + magnifiedDividendCorrections[_token][_owner]
+            ) / MAGNITUDE :
+            magnifiedDividendPerShare[_token]
+            * tokenHoldersMap.get(_owner, _token) / MAGNITUDE;
     }
 
     function getNumberOfTokenHolders() external view returns (uint256) {
@@ -314,12 +279,12 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
             nextClaimTime - block.timestamp : 0;
     }
     
-    function process() public returns (uint256, uint256) {
+    function executeDividends() public {
         uint256 numberOfTokenHolders = tokenHoldersMap.length();
         uint256 gasLeft = gasleft();
 
         if (numberOfTokenHolders == 0)
-            return (0, lastProcessedIndex);
+            return;
 
         uint256 gasUsed = 0;
         uint256 iterations = 0;
@@ -332,7 +297,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
             if (_lastProcessedIndex >= numberOfTokenHolders)
                 _lastProcessedIndex = 0;
 
-            (address account,) = tokenHoldersMap.at(_lastProcessedIndex);
+            address account = tokenHoldersMap.keyAt(_lastProcessedIndex);
 
             if (_canAutoClaim(lastClaimTimes[rewardToken][account]))
                 _processAccount(account, rewardToken);
@@ -348,8 +313,12 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         }
         
         lastProcessedIndex = _lastProcessedIndex;
-
-        return (iterations, lastProcessedIndex);
+        
+        emit ProcessedDividendTracker(
+            iterations,
+            lastProcessedIndex,
+            claimGas
+        );
     }
     
     function _processAccount(
@@ -378,10 +347,10 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         excludedFromDividends[account] = true;
 
         magnifiedDividendCorrections[rewardStruct.rewardToken][account]
-            += _toInt256Safe(magnifiedDividendPerShare[account]
+            += int256(magnifiedDividendPerShare[rewardStruct.rewardToken]
                 * balanceOf(account));
         
-        tokenHoldersMap.remove(account);
+        tokenHoldersMap.remove(account, rewardStruct.rewardToken);
     }
 
     function _canAutoClaim(uint256 lastClaimTime) private view returns (bool) {
@@ -408,9 +377,8 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
     {
         super._transfer(from, to, amount);
         
-        int256 _magCorrection = _toInt256Safe(
-            magnifiedDividendPerShare[rewardStruct.rewardToken] * amount
-        );
+        int256 _magCorrection = int256(
+            magnifiedDividendPerShare[rewardStruct.rewardToken] * amount);
         
         if (!excludedFromDividends[from]) {
             magnifiedDividendCorrections[rewardStruct.rewardToken][from]
@@ -431,12 +399,12 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
         uint256 balance = balanceOf(account);
         
         if (balance > minTokensForDividends) {
-            tokenHoldersMap.set(account, balance);
+            tokenHoldersMap.set(account, rewardStruct.rewardToken, balance);
             
             if (feeStruct.rewardFee > 0)
                 _processAccount(account, rewardStruct.rewardToken);
         } else {
-            tokenHoldersMap.remove(account);
+            tokenHoldersMap.remove(account, rewardStruct.rewardToken);
         }
     }
 
@@ -578,7 +546,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
             }
 
             amount = amount - treasuryFee - burnFee - conversionFees;
-            totalCollected += treasuryFee;
+            treasuryFeeCollected += treasuryFee;
 
             // Restricting the max token users can hold excluding pairs
             require(
@@ -800,7 +768,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeManager {
 
         if (dividends > 0) {
             magnifiedDividendPerShare[rewardStruct.rewardToken] += 
-                dividends * magnitude / totalSupply();
+                dividends * MAGNITUDE / totalSupply();
             totalDividendsDistributed[rewardStruct.rewardToken] += dividends;
         }
         
