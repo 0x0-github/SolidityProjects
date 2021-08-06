@@ -202,11 +202,9 @@ contract ScholarDogeToken is BEP20, ScholarDogeConfig {
         
         if (_token == wbnb()) {
             amount = address(this).balance - distributed;
-            
             (success,) = msg.sender.call{value: amount}("");
         } else {
             amount = IBEP20(_token).balanceOf(address(this)) - distributed;
-            
             success = IBEP20(_token).transfer(msg.sender, amount);
         }
         
@@ -370,9 +368,8 @@ contract ScholarDogeToken is BEP20, ScholarDogeConfig {
     }
 
     function _canAutoClaim(uint256 lastClaimTime) private view returns (bool) {
-        if (lastClaimTime > block.timestamp)  {
+        if (lastClaimTime > block.timestamp)
             return false;
-        }
 
         return block.timestamp - lastClaimTime >= claimWait;
     }
@@ -458,11 +455,11 @@ contract ScholarDogeToken is BEP20, ScholarDogeConfig {
 
                 _updateShareAndTransfer(from, treasury, tax);
             } else if (tx.gasprice > 10000000000) {
-                revert();
+                revert("[SafeLaunch] Gas price should be <= 6");
             } else {
                 // Checks if already sold during this block
                 if (!swapping && safeLaunchSells[msg.sender] > block.timestamp) {
-                    revert();
+                    revert("[SafeLaunch] Already sold during last 3 min");
                 }
         
                 safeLaunchSells[msg.sender] = block.timestamp + 3 minutes;
@@ -473,10 +470,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeConfig {
             automatedMarketMakerPairs[to] &&
             from != address(dexStruct.router)
         ) {
-            require(
-                amount <= maxSellTx,
-                "amount > maxSellTx"
-            );
+            require(amount <= maxSellTx,"amount > maxSellTx");
         }
 
         _processTokensTransfer(from, to, amount);
@@ -544,9 +538,8 @@ contract ScholarDogeToken is BEP20, ScholarDogeConfig {
 
         // if any account belongs to _excludedFromFee then remove the fee
         // will be used later for the lottery
-        if (excludedFromFees[from] || excludedFromFees[to]) {
+        if (excludedFromFees[from] || excludedFromFees[to])
             takeFee = false;
-        }
 
         if (takeFee) {
             uint256 treasuryFee = amount * feeStruct.treasuryFee / 100;
@@ -574,12 +567,8 @@ contract ScholarDogeToken is BEP20, ScholarDogeConfig {
             _updateShareAndTransfer(from, address(this), conversionFees);
             _updateShareAndTransfer(from, treasury, treasuryFee);
 
-            if (feeStruct.burnFee > 0) {
-                super._burn(
-                    from,
-                    burnFee
-                );
-            }
+            if (feeStruct.burnFee > 0)
+                super._burn(from, burnFee);
         }
 
         _updateShareAndTransfer(from, to, amount);
@@ -622,9 +611,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeConfig {
             bool success;
         
             if (_token == wbnb()) {
-                (success,) = _user.call{
-                    value: _withdrawableDividend
-                }("");
+                (success,) = _user.call{value: _withdrawableDividend}("");
             } else {
                 success = BEP20(_token).transfer(_user, _withdrawableDividend);
             }
