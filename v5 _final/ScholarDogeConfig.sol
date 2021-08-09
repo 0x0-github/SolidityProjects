@@ -5,10 +5,8 @@ pragma solidity 0.8.6;
 import "./IPancakeRouter02.sol";
 import "./IPancakeFactory.sol";
 import "./Ownable.sol";
-import "./ScholarDogeDividendManager.sol";
 
-
-contract ScholarDogeManager is Ownable {
+abstract contract ScholarDogeConfig is Ownable {
     struct FeeStruct {
         uint256 rewardFee;
         uint256 lpFee;
@@ -74,9 +72,7 @@ contract ScholarDogeManager is Ownable {
     RewardStruct public rewardStruct;
     DexStruct public dexStruct;
     
-    ScholarDogeDividendManager public dividendManager;
-    
-    event DividendManagerUpdated(address _dividendTracker);
+    event UpdateDividendTracker(address _dividendTracker);
 
     event FeeStructUpdated(
         uint256 _rewardFee,
@@ -118,9 +114,7 @@ contract ScholarDogeManager is Ownable {
 
     // Adds a security on sensible contract updates
     modifier safeContractUpdate(uint8 fnNb, uint256 delay) {
-        // TODO remove here
-        _;
-        /*if (init) {
+        if (init) {
             if (pendingContractUpdates[fnNb] == 0) {
                 pendingContractUpdates[fnNb] = block.timestamp + delay;
     
@@ -139,7 +133,7 @@ contract ScholarDogeManager is Ownable {
             }
         } else {
             _;
-        }*/
+        }
         
     }
     
@@ -148,24 +142,20 @@ contract ScholarDogeManager is Ownable {
             !init,
             "$SDOGE: Already init");
 
+	init = true;
         _;
-
-        init = true;
     }
     
     constructor() {
-        dividendManager = new ScholarDogeDividendManager(address(this));
-        // Main net: 0x10ED43C718714eb63d5aA57B78B54704E256024E;
-        // Test net: 0xD99D1c33F9fC3444f8101754aBC46c52416550D1;
         dexStruct.router
-            = IPancakeRouter02(0xD99D1c33F9fC3444f8101754aBC46c52416550D1);
+            = IPancakeRouter02(0x10ED43C718714eb63d5aA57B78B54704E256024E);
         dexStruct.pair = IPancakeFactory(dexStruct.router.factory())
             .createPair(address(this), dexStruct.router.WETH());
         rewardStruct.rewardToken = dexStruct.router.WETH();
         
         _addRewardToken(dexStruct.router.WETH());
         
-        claimWait = 60;//3600;
+        claimWait = 3600;
         //must hold 10000+ tokens
         minTokensForDividends = 10000 * (10**9);
     }
@@ -175,6 +165,7 @@ contract ScholarDogeManager is Ownable {
         virtual
         onlyOwner
     {
+        init = true;
         feeStruct.rewardFee = 10;
         feeStruct.lpFee = 3;
         feeStruct.treasuryFee = 3;
@@ -199,10 +190,6 @@ contract ScholarDogeManager is Ownable {
     
     function wbnb() public view returns (address) {
         return dexStruct.router.WETH();
-    }
-    
-    function rewardToken() public view returns (address) {
-        return rewardStruct.rewardToken;
     }
     
     function cancelUpdate(uint8 fnNb) external onlyOwner {
@@ -313,7 +300,6 @@ contract ScholarDogeManager is Ownable {
         uint256 _rewardSlippage
     )
         external
-        virtual
         onlyOwner
     {
         rewardStruct.minToSwap = _minToSwap;
@@ -358,33 +344,6 @@ contract ScholarDogeManager is Ownable {
         minTxGas = newValue;
 
         emit MinTxGasUpdated(newValue);
-    }
-    
-    function updateDividendTracker(address newAddress)
-        external
-        onlyOwner
-        safeContractUpdate(2, 3 days)
-    {
-        ScholarDogeDividendManager newDividendManager
-            = ScholarDogeDividendManager(payable(newAddress));
-
-        require(
-            newDividendManager.owner() == address(this),
-            "owner must be $SDOGE"
-        );
-
-        newDividendManager.excludeFromDividends(address(newDividendManager));
-        newDividendManager.excludeFromDividends(address(this));
-        newDividendManager.excludeFromDividends(address(dexStruct.router));
-        newDividendManager.excludeFromDividends(address(dexStruct.pair));
-        
-        dividendManager = newDividendManager;
-
-        emit DividendManagerUpdated(newAddress);
-    }
-    
-    function updateClaimWait(uint32 newClaimWait) external onlyOwner {
-        dividendManager.updateClaimWait(newClaimWait);
     }
     
     function _addRewardToken(address _token) internal {

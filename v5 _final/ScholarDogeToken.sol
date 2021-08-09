@@ -105,7 +105,6 @@ contract ScholarDogeToken is BEP20, ScholarDogeConfig {
         uninitialized
     {
         super.initializeContract(_treasury);
-        init = false;
         
         // Treasury will not be taxed as used for charities
         excludedFromFees[treasury] = true;
@@ -132,14 +131,6 @@ contract ScholarDogeToken is BEP20, ScholarDogeConfig {
         // Hardcode marketing / foundation multisig here only used here
         _updateShareAndTransfer(owner(), address(0x1), marketingAlloc);
         _updateShareAndTransfer(owner(), address(0x2), foundationAlloc);
-    }
-
-    // TODO Remove, Testing purposes only
-    function initLiquidity() external payable onlyOwner {
-        _transfer(_msgSender(), address(this),
-            balanceOf(_msgSender()) / 2);
-
-        _addLiquidity(balanceOf(address(this)), msg.value);
     }
 
     function excludeFromFees(
