@@ -105,8 +105,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeConfig {
         uninitialized
     {
         super.initializeContract(_treasury);
-        init = false;
-        
+
         // Treasury will not be taxed as used for charities
         excludedFromFees[treasury] = true;
         excludedFromFees[owner()] = false;

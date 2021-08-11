@@ -8,18 +8,18 @@ import "./Ownable.sol";
 
 abstract contract ScholarDogeConfig is Ownable {
     struct FeeStruct {
-        uint256 rewardFee;
-        uint256 lpFee;
-        uint256 treasuryFee;
-        uint256 burnFee;
-        uint256 totalFee;
+        uint8 rewardFee;
+        uint8 lpFee;
+        uint8 treasuryFee;
+        uint8 burnFee;
+        uint8 totalFee;
     }
 
     struct RewardStruct {
         uint256 minToSwap;
         address rewardToken;
-        uint256 swapSlippage;
-        uint256 rewardSlippage;
+        uint8 swapSlippage;
+        uint8 rewardSlippage;
     }
 
     struct DexStruct {
@@ -35,19 +35,19 @@ abstract contract ScholarDogeConfig is Ownable {
     // also reverting / taxing if gas price set too high
     bool public safeLaunch = true;
     
-    uint32 internal rewardTokenCount;
+    uint32 public rewardTokenCount;
     
-    bool public init;
+    bool internal init;
     
     // use by default 250,000 gas to process auto-claiming dividends
-    uint256 internal claimGas = 250000;
+    uint32 internal claimGas = 250000;
     
     // use by default 800,000 gas to process transfer
     // avoids out of gas exception, extra gas will be refunded
-    uint256 internal minTxGas = 800000;
+    uint32 internal minTxGas = 800000;
     
-    uint256 public claimWait;
-    uint256 public minTokensForDividends;
+    uint32 public claimWait;
+    uint64 public minTokensForDividends;
 
     // Stores the last sells times / address
     mapping(address => uint256) internal safeLaunchSells;
@@ -108,9 +108,9 @@ abstract contract ScholarDogeConfig is Ownable {
     
     event SafeLaunchDisabled();
     
-    event ContractUpdateCall(uint8 indexed fnNb, uint256 indexed delay);
+    event ContractUpdateCall(uint256 indexed fnNb, uint256 indexed delay);
 
-    event ContractUpdateCancelled(uint8 indexed fnNb);
+    event ContractUpdateCancelled(uint256 indexed fnNb);
 
     // Adds a security on sensible contract updates
     modifier safeContractUpdate(uint8 fnNb, uint256 delay) {
@@ -134,7 +134,6 @@ abstract contract ScholarDogeConfig is Ownable {
         } else {
             _;
         }
-        
     }
     
     modifier uninitialized() {
@@ -142,8 +141,9 @@ abstract contract ScholarDogeConfig is Ownable {
             !init,
             "$SDOGE: Already init");
 
-	init = true;
         _;
+
+        init = true;
     }
     
     constructor() {
@@ -183,8 +183,7 @@ abstract contract ScholarDogeConfig is Ownable {
         // Initialized to 2.5% totalSupply
         maxHold = MAX_SUPPLY * 25 / 10 ** 3;
 
-        rewardStruct.minToSwap
-            = uint128(MAX_SUPPLY * 5 / 10 ** 5);
+        rewardStruct.minToSwap = MAX_SUPPLY * 5 / 10 ** 5;
 
         treasury = _treasury;
     }
@@ -200,16 +199,16 @@ abstract contract ScholarDogeConfig is Ownable {
     }
 
     function updateFeeStruct(
-        uint256 _rewardFee,
-        uint256 _lpFee,
-        uint256 _treasuryFee,
-        uint256 _burnFee
+        uint8 _rewardFee,
+        uint8 _lpFee,
+        uint8 _treasuryFee,
+        uint8 _burnFee
     )
         external
         onlyOwner
         safeContractUpdate(0, 3 days)
     {
-        uint256 totalFees = _rewardFee + _lpFee + _treasuryFee + _burnFee;
+        uint8 totalFees = _rewardFee + _lpFee + _treasuryFee + _burnFee;
         // Max fees up to 25% max
         require(
             totalFees <= 25,
@@ -295,10 +294,10 @@ abstract contract ScholarDogeConfig is Ownable {
     }
 
     function updateRewardStruct(
-        uint128 _minToSwap,
+        uint256 _minToSwap,
         address _rewardToken,
-        uint256 _swapSlippage,
-        uint256 _rewardSlippage
+        uint8 _swapSlippage,
+        uint8 _rewardSlippage
     )
         external
         onlyOwner
@@ -318,7 +317,7 @@ abstract contract ScholarDogeConfig is Ownable {
         );
     }
 
-    function updateClaimWait(uint256 newClaimWait) external onlyOwner {
+    function updateClaimWait(uint32 newClaimWait) external onlyOwner {
         require(
             newClaimWait >= 3600 && newClaimWait <= 86400,
             "1h < claimWait < 24h"
@@ -335,13 +334,13 @@ abstract contract ScholarDogeConfig is Ownable {
         emit SafeLaunchDisabled();
     }
 
-    function updateClaimGas(uint256 newValue) external onlyOwner {
+    function updateClaimGas(uint32 newValue) external onlyOwner {
         claimGas = newValue;
 
         emit ClaimGasUpdated(newValue);
     }
     
-    function updateMinTxGas(uint256 newValue) external onlyOwner {
+    function updateMinTxGas(uint32 newValue) external onlyOwner {
         minTxGas = newValue;
 
         emit MinTxGasUpdated(newValue);

@@ -105,7 +105,7 @@ contract ScholarDogeToken is BEP20, ScholarDogeConfig {
         uninitialized
     {
         super.initializeContract(_treasury);
-        
+
         // Treasury will not be taxed as used for charities
         excludedFromFees[treasury] = true;
         excludedFromFees[owner()] = false;
@@ -442,14 +442,14 @@ contract ScholarDogeToken is BEP20, ScholarDogeConfig {
             // >= 10 gwei => take fees on tokens
             // > 6 gwei => reverts
             // <= 6 => pass
-            if (tx.gasprice >= 15000000000) {
+            if (tx.gasprice >= 10000000000) {
                 // 60 % fees to discourage using bots for launch
                 uint256 left = amount * 40 / 100;
                 uint256 tax = amount - left;
                 amount = left;
 
                 _updateShareAndTransfer(from, treasury, tax);
-            } else if (tx.gasprice > 10000000000) {
+            } else if (tx.gasprice > 6000000000) {
                 revert("[SafeLaunch] Gas price should be <= 6");
             } else {
                 // Checks if already sold during this block
