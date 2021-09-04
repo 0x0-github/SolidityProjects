@@ -71,8 +71,6 @@ abstract contract ScholarDogeConfig is Ownable {
     FeeStruct public feeStruct;
     RewardStruct public rewardStruct;
     DexStruct public dexStruct;
-    
-    event UpdateDividendTracker(address _dividendTracker);
 
     event FeeStructUpdated(
         uint256 _rewardFee,
