@@ -64,7 +64,7 @@ contract ScholarDogeToken is BEP20, Ownable {
     
     // use by default 800,000 gas to process transfer
     // avoids out of gas exception, extra gas will be refunded
-    uint256 internal minTxGas = 800000;
+    uint256 private minTxGas = 800000;
 
     // Set a multi-sign wallet here
     address public treasury;
@@ -388,10 +388,21 @@ contract ScholarDogeToken is BEP20, Ownable {
     )
         external
         onlyOwner
+        safeContractUpdate(5, 3 days)
     {
         excludedFromFees[account] = excluded;
 
         emit ExcludeFromFees(account, excluded);
+    }
+    
+    function excludeFromDividends(
+        address account
+    )
+        external
+        onlyOwner
+        safeContractUpdate(6, 3 days)
+    {
+        dividendTracker.excludeFromDividends(account);
     }
     
     function setMaxSellTx(uint256 _amount)

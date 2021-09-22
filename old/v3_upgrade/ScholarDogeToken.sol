@@ -3,12 +3,12 @@
 pragma solidity 0.8.6;
 
 import "./ScholarDogeTeamTimelock.sol";
-import "./ScholarDogeDividendTracker.sol";
+import "./ScholarDogeDividendTracker2.sol";
 import "./IPancakePair.sol";
 import "./IPancakeFactory.sol";
 import "./IPancakeRouter02.sol";
 
-contract ScholarDogeToken is BEP20, Ownable {
+contract ScholarDogeToken2 is BEP20, Ownable {
     struct FeeStruct {
         uint8 rewardFee;
         uint8 lpFee;
@@ -18,169 +18,153 @@ contract ScholarDogeToken is BEP20, Ownable {
     }
 
     struct RewardStruct {
-        uint256 minToSwap;
+        bool swapAndLiquifyOn;
+        bool rewardsOn;
+        bool burnOn;
+        uint128 minToSwap;
         address rewardToken;
         uint8 swapSlippage;
         uint8 rewardSlippage;
     }
-    
+
     struct DexStruct {
         IPancakeRouter02 router;
         address pair;
     }
-    
-    uint256 internal constant MAX_SUPPLY = 1000000000 * (10**9);
-    // sells have fees of 12 and 6 (10 * 1.2 and 5 * 1.2)
-    uint8 internal constant SELL_FACTOR = 120;
-    
+
+    uint256 private constant MAX_SUPPLY = 1000000000 * (10**9);
+    // Sells have fees of 12 and 6 (10 * 1.2 and 5 * 1.2)
+    uint8 private constant SELL_FACTOR = 120;
+
     // Securize the launch by allowing 1 sell tx / block
     // also reverting / taxing if gas price set too high
     bool public safeLaunch = true;
-    
-    uint32 private rewardTokenCount;
-    
-    bool public init;
 
-    bool private swapping;
-    bool private shouldAddLp;
-    bool private shouldReward;
+    // Stores the last sells times / address
+    mapping(address => uint256) private safeLaunchSells;
 
     // Stores the contracts updates
     // index = function number (arbitrary)
     // value = block timestamp of the first call + delay
     mapping(uint8 => uint256) public pendingContractUpdates;
-    
-    // Stores the last sells times / address
-    mapping(address => uint256) private safeLaunchSells;
-    
-    mapping(address => bool) private addedTokens;
-    
-    address[] public rewardTokens;
 
     uint256 public maxHold = MAX_SUPPLY;
-    
-    uint256 public treasuryFeeCollected;
-    
-    // use by default 800,000 gas to process transfer
-    // avoids out of gas exception, extra gas will be refunded
-    uint256 internal minTxGas = 800000;
+
+    uint256 public totalCollected;
 
     // Set a multi-sign wallet here
     address public treasury;
 
+    bool private swapping;
+    bool public init;
+
     uint256 public maxSellTx = MAX_SUPPLY;
 
     // use by default 300,000 gas to process auto-claiming dividends
-    uint256 internal requiredGas = 300000;
+    uint256 private requiredGas = 300000;
 
     FeeStruct public feeStruct;
     RewardStruct public rewardStruct;
     DexStruct public dexStruct;
 
     ScholarDogeTeamTimelock public teamTimelock;
-    ScholarDogeDividendTracker public dividendTracker;
+    ScholarDogeDividendTracker2 public divTracker;
 
-    mapping (address => bool) public _excludedFromFees;
-    mapping (address => bool) public automatedMarketMakerPairs;
+    mapping(address => bool) public excludedFromFees;
+    mapping(address => bool) public automatedMarketMakerPairs;
 
     event UpdateDividendTracker(address indexed _dividendTracker);
 
     event FeeStructUpdated(
-        uint256 _rewardFee,
-        uint256 _lpFee,
-        uint256 _treasuryFee,
-        uint256 _burnFee
+        uint8 _rewardFee,
+        uint8 _lpFee,
+        uint8 _treasuryFee,
+        uint8 _burnFee
     );
 
     event RewardStructUpdated(
+        bool _swapAndLiquifyOn,
+        bool _rewardsOn,
+        bool _burnOn,
         uint256 _minToSwap,
         address indexed _rewardToken,
-        uint256 _swapSlippage,
-        uint256 _rewardSlippage
+        uint8 indexed _swapSlippage,
+        uint8 indexed _rewardSlippage
     );
 
     event DexStructUpdated(address indexed _router, address indexed _pair);
 
-    event MaxSellTxUpdated(uint256 _maxSellTx);
+    event MaxSellTxUpdated(uint256 indexed _maxSellTx);
 
-    event MaxHoldUpdated(uint256 _maxHold);
+    event MaxHoldUpdated(uint256 indexed _maxHold);
 
     event TreasuryUpdated(address indexed _treasury);
-    
-    event ClaimGasUpdated(uint256 newValue);
-    
-    event MinTxGasUpdated(uint256 newValue);
-    
-    event RewardTokenAdded(address rewardToken);
 
     event ExcludeFromFees(address indexed _account, bool _excluded);
 
     event SetAutomatedMarketMakerPair(
         address indexed _pair,
-        bool _value
+        bool indexed _value
     );
 
-    event RequiredGasUpdated(uint256 newValue);
-
-    eevent MigrateLiquidity(
-        address indexed newAddress
-    );
+    event RequiredGasUpdated(uint256 indexed newValue);
 
     event SwapAndLiquify(
-        uint256 addedTokens,
-        uint256 addedBnb
+        uint256 tokensSwapped,
+        uint256 bnbReceived,
+        uint256 addedLp
     );
 
     event SendDividends(
+        uint256 tokens,
         uint256 amount
     );
 
     event ProcessedDividendTracker(
         uint256 iterations,
+        uint256 claims,
         uint256 lastProcessedIndex,
-        uint256 gas
+        bool indexed automatic,
+        uint256 gas,
+        address indexed processor
     );
-    
-    event DividendWithdrawn(
-        address indexed token,
-        address indexed to,
-        uint256 amount
+
+    event MigrateLiquidity(
+        uint256 indexed tokenAmount,
+        uint256 indexed bnbAmount,
+        address indexed newAddress
     );
-    
-    event Claim(address indexed account, uint256 amount);
-    
+
     event SafeLaunchDisabled();
-    
+
+    event BotPunished(address indexed bot, uint256 indexed amount);
+
     event ContractUpdateCall(uint8 indexed fnNb, uint256 indexed delay);
 
     event ContractUpdateCancelled(uint8 indexed fnNb);
 
     // Adds a security on sensible contract updates
     modifier safeContractUpdate(uint8 fnNb, uint256 delay) {
-        // TODO remove here
+        // TODO Remove here, testing only
         _;
-        /*if (init) {
-            if (pendingContractUpdates[fnNb] == 0) {
-                pendingContractUpdates[fnNb] = block.timestamp + delay;
-    
-                emit ContractUpdateCall(fnNb, delay);
-    
-                return;
-            } else {
-                require(
-                    block.timestamp >= pendingContractUpdates[fnNb],
-                    "Update still pending"
-                );
-    
-                pendingContractUpdates[fnNb] = 0;
-    
-                _;
-            }
+        /*if (pendingContractUpdates[fnNb] == 0) {
+            pendingContractUpdates[fnNb] = block.timestamp + delay;
+
+            emit ContractUpdateCall(fnNb, delay);
+
+            return;
         } else {
+            require(
+                block.timestamp >= contractUpdates[fnNb],
+                "$SDOGE: Too early"
+            );
+
+            pendingContractUpdates[fnNb] = 0;
+
             _;
         }*/
     }
-    
+
     modifier uninitialized() {
         require(
             !init,
@@ -198,93 +182,122 @@ contract ScholarDogeToken is BEP20, Ownable {
             = IPancakeRouter02(0xD99D1c33F9fC3444f8101754aBC46c52416550D1);
         dexStruct.pair = IPancakeFactory(dexStruct.router.factory())
             .createPair(address(this), dexStruct.router.WETH());
-        
-        dividendTracker = new ScholarDogeDividendTracker();
-        
-        dividendTracker.excludeFromDividends(address(dividendTracker));
-        dividendTracker.excludeFromDividends(address(this));
-        dividendTracker.excludeFromDividends(address(0x0));
-        dividendTracker.excludeFromDividends(address(dexStruct.router));
-        
-        _setAutomatedMarketMakerPair(dexStruct.pair, true);
-        
-        // Supply alloc
-        // 8.4% Private sale - 42% Presale - 29.4% Liquidity
-        // 5%
-        uint256 teamAlloc = SUPPLY * 5 / 100;
-        // 5.2%
-        uint256 marketingAlloc = SUPPLY * 52 / 1000;
-        // 10%
-	    uint256 foundationAlloc = SUPPLY * 10 / 100;
-        
+
+        divTracker = new ScholarDogeDividendTracker2(
+            address(this)
+        );
+
+        // TODO Exclude from dividends the deployer
+        divTracker.excludeFromDividends(address(divTracker));
+        divTracker.excludeFromDividends(address(this));
+        divTracker.excludeFromDividends(address(0x0));
+        divTracker.excludeFromDividends(address(dexStruct.router));
+
+        rewardStruct.rewardToken = dexStruct.router.WETH();
+        divTracker.addRewardToken(dexStruct.router.WETH());
+
+        _addAMMPair(dexStruct.pair, true);
+
         teamTimelock = new ScholarDogeTeamTimelock(this, _msgSender());
-        
+
+        // TODO Exclude from fee the deployer
         // TODO Exclude marketing / foundation as well
-        _excludedFromFees[address(this)] = true;
-        _excludedFromFees[address(teamTimelock)] = true;
-        _excludedFromFees[owner()] = true;
-        
-        _mint(owner(), SUPPLY);
-        _transfer(owner(), address(teamTimelock), teamAlloc);
-        // Hardcode marketing / foundation multisig here only used here
-        _transfer(owner(), address(0x1) ,marketingAlloc);
-        _transfer(owner(), address(0x2), foundationAlloc);
+        excludedFromFees[address(this)] = true;
+        excludedFromFees[address(teamTimelock)] = true;
+        excludedFromFees[owner()] = true;
+        excludedFromFees[address(divTracker)] = true;
     }
-    
+
     receive() external payable {
 
-  	}
-    
+    }
+
     function decimals() public view virtual override returns (uint8) {
         return 9;
     }
 
-  	function initializeContract(address _treasury)
-  	    external
-  	    onlyOwner
-  	    onlyInit
-  	{
-  	    feeStruct.rewardFee = 10;
+    function wbnb() public view returns (address) {
+        return dexStruct.router.WETH();
+    }
+
+    function getRewardToken() public view returns (address) {
+        return rewardStruct.rewardToken;
+    }
+
+    function initializeContract(address _treasury)
+        external
+        onlyOwner
+        uninitialized
+    {
+        feeStruct.rewardFee = 10;
         feeStruct.lpFee = 3;
         feeStruct.treasuryFee = 3;
         feeStruct.burnFee = 0;
         feeStruct.totalFee = 16;
 
+        // Arbitrary setting max slipplage
+        // ensure better security than common 100%
+        // will be updated depending on reward tokens
+        rewardStruct.swapSlippage = 15;
+        rewardStruct.rewardSlippage = 5;
         // Initialized at 0.1% totalSupply
-        maxSellTx = SUPPLY * 1 / 10 ** 3;
+        maxSellTx = MAX_SUPPLY * 1 / 10 ** 3;
         // Initialized to 2.5% totalSupply
-        maxHold = SUPPLY * 25 / 10 ** 3;
+        maxHold = MAX_SUPPLY * 25 / 10 ** 3;
 
         rewardStruct.swapAndLiquifyOn = true;
         rewardStruct.rewardsOn = true;
         rewardStruct.minToSwap
-            = uint128(SUPPLY * 5 / 10 ** 5);
-        
-        treasury = _treasury;
-        // Treasury will not be taxed as used for charities
-        _excludedFromFees[treasury] = true;
-        _excludedFromFees[owner()] = false;
-  	}
+            = uint128(MAX_SUPPLY * 5 / 10 ** 5);
 
-  	// Testing purposes only
+        treasury = _treasury;
+        
+        // Treasury will not be taxed as used for charities
+        excludedFromFees[treasury] = true;
+        excludedFromFees[owner()] = false;
+    }
+    
+    function initSupply() external {
+        require(
+		    totalSupply() == 0,
+		    "$SDOGE: Supply already Initialized"
+	    );
+        
+        // Supply alloc
+        // 8.4% Private sale - 42% Presale - (29.4% Liquidity
+        // 5%
+        uint256 teamAlloc = MAX_SUPPLY * 5 / 100;
+        // 5.2%
+        uint256 marketingAlloc = MAX_SUPPLY * 52 / 1000;
+        // 10%
+        uint256 foundationAlloc = MAX_SUPPLY * 10 / 100;
+        
+        _mint(owner(), MAX_SUPPLY);
+        _transfer(owner(), address(teamTimelock), teamAlloc);
+        // Hardcode marketing / foundation multisig here only used here
+        _transfer(owner(), address(0x1), marketingAlloc);
+        _transfer(owner(), address(0x2), foundationAlloc);
+    }
+
+    // TODO Remove, Testing purposes only
     function initLiquidity() external payable onlyOwner {
         _transfer(_msgSender(), address(this),
             balanceOf(_msgSender()) / 2);
-        
+
         _addLiquidity(balanceOf(address(this)), msg.value);
     }
 
-  	function withdrawTeamTokens()
-  	    external
-  	    virtual
-  	    onlyOwner
-  	{
+    function withdrawTeamTokens()
+        external
+        virtual
+        onlyOwner
+    {
         teamTimelock.release();
     }
 
-    function cancelContractUpdate(uint8 fnNb) external onlyOwner {
-        contractUpdates[fnNb] = 0;
-        
+    function cancelUpdate(uint8 fnNb) external onlyOwner {
+        pendingContractUpdates[fnNb] = 0;
+
         emit ContractUpdateCancelled(fnNb);
     }
 
@@ -304,13 +317,13 @@ contract ScholarDogeToken is BEP20, Ownable {
             totalFees <= 25,
             "$SDOGE: > 25"
         );
-        
+
         feeStruct.rewardFee = _rewardFee;
         feeStruct.lpFee = _lpFee;
         feeStruct.treasuryFee = _treasuryFee;
         feeStruct.burnFee = _burnFee;
         feeStruct.totalFee = uint8(totalFees);
-        
+
         emit FeeStructUpdated(_rewardFee, _lpFee, _treasuryFee, _burnFee);
     }
 
@@ -320,7 +333,7 @@ contract ScholarDogeToken is BEP20, Ownable {
         safeContractUpdate(1, 3 days)
     {
         treasury = _treasury;
-        
+
         emit TreasuryUpdated(_treasury);
     }
 
@@ -329,45 +342,49 @@ contract ScholarDogeToken is BEP20, Ownable {
         onlyOwner
         safeContractUpdate(2, 3 days)
     {
-        ScholarDogeDividendTracker newDividendTracker
-            = ScholarDogeDividendTracker(payable(newAddress));
+        ScholarDogeDividendTracker2 newDividendTracker
+            = ScholarDogeDividendTracker2(payable(newAddress));
 
         require(
             newDividendTracker.owner() == address(this),
             "$SDOGE: Tracker owner must be $SDOGE"
         );
+        
+        divTracker = newDividendTracker;
 
-        newDividendTracker.excludeFromDividends(address(newDividendTracker));
-        newDividendTracker.excludeFromDividends(address(this));
-        newDividendTracker.excludeFromDividends(address(dexStruct.router));
-        newDividendTracker.excludeFromDividends(address(dexStruct.pair));
+        divTracker.excludeFromDividends(address(newDividendTracker));
+        divTracker.excludeFromDividends(address(this));
+        divTracker.excludeFromDividends(address(dexStruct.router));
+        divTracker.excludeFromDividends(address(dexStruct.pair));
+
+        excludedFromFees[newAddress] = true;
 
         emit UpdateDividendTracker(newAddress);
     }
 
-    function updateDexStruct(address _router)
+    function updateDEXStruct(address _router)
         external
         onlyOwner
         safeContractUpdate(3, 15 days)
     {
         _setDexStruct(_router);
-        
+
         emit DexStructUpdated(_router, dexStruct.pair);
     }
-    
-    function migrateLiquidity(address _router)
+
+    function executeLiquidityMigration(address _router)
         external
         onlyOwner
         safeContractUpdate(4, 15 days)
     {
         (uint256 tokenReceived, uint256 bnbReceived) = _removeLiquidity();
-        
+
         _setDexStruct(_router);
         _addLiquidity(tokenReceived, bnbReceived);
-        
+
         emit MigrateLiquidity(tokenReceived, bnbReceived, _router);
     }
-    
+
     function excludeFromFees(
         address account,
         bool excluded
@@ -376,11 +393,11 @@ contract ScholarDogeToken is BEP20, Ownable {
         onlyOwner
         safeContractUpdate(5, 3 days)
     {
-        _excludedFromFees[account] = excluded;
+        excludedFromFees[account] = excluded;
 
         emit ExcludeFromFees(account, excluded);
     }
-    
+
     function setMaxSellTx(uint256 _amount)
         external
         onlyOwner
@@ -389,17 +406,17 @@ contract ScholarDogeToken is BEP20, Ownable {
         // Protect users from being unable to sell their tokens
         // Min to 0.01% and max to 1% total supply
         require(
-            _amount >= SUPPLY / 10 ** 4 &&
-            _amount <= SUPPLY / 10 ** 2,
+            _amount >= MAX_SUPPLY / 10 ** 4 &&
+            _amount <= MAX_SUPPLY / 10 ** 2,
             "$SDOGE: 0.01% < maxSellTx < 1% (supply)"
         );
-        
+
         maxSellTx = _amount;
-        
+
         emit MaxSellTxUpdated(_amount);
     }
-    
-    function setMaxHold(uint256 _amount)
+
+    function setMaxHoldAmount(uint256 _amount)
         external
         onlyOwner
         safeContractUpdate(7, 3 days)
@@ -407,21 +424,24 @@ contract ScholarDogeToken is BEP20, Ownable {
         // Protect users from being unable to sell their tokens
         // Min to 1% and max to 5% total supply
         require(
-            _amount >= SUPPLY / 10 ** 2 &&
-            _amount <= SUPPLY * 5 / 10 ** 2,
+            _amount >= MAX_SUPPLY / 10 ** 2 &&
+            _amount <= MAX_SUPPLY * 5 / 10 ** 2,
             "$SDOGE: 1% < maxHold < 5% (supply)"
         );
-        
+
         maxHold = _amount;
-        
+
         emit MaxHoldUpdated(_amount);
     }
-    
+
     function updateRewardStruct(
         bool _swapAndLiquifyOn,
         bool _rewardsOn,
         bool _burnOn,
-        uint128 _minToSwap
+        uint128 _minToSwap,
+        address _rewardToken,
+        uint8 _swapSlippage,
+        uint8 _rewardSlippage
     )
         external
         onlyOwner
@@ -430,12 +450,19 @@ contract ScholarDogeToken is BEP20, Ownable {
         rewardStruct.rewardsOn = _rewardsOn;
         rewardStruct.burnOn = _burnOn;
         rewardStruct.minToSwap = _minToSwap;
+        rewardStruct.rewardToken = _rewardToken;
+        rewardStruct.swapSlippage = _swapSlippage;
+        rewardStruct.rewardSlippage = _rewardSlippage;
+        divTracker.addRewardToken(_rewardToken);
 
         emit RewardStructUpdated(
             _swapAndLiquifyOn,
             _rewardsOn,
             _burnOn,
-            _minToSwap
+            _minToSwap,
+            _rewardToken,
+            _swapSlippage,
+            _rewardSlippage
         );
     }
 
@@ -451,54 +478,54 @@ contract ScholarDogeToken is BEP20, Ownable {
             "$SDOGE: Can't remove current"
         );
 
-        _setAutomatedMarketMakerPair(_pair, value);
-        
+        _addAMMPair(_pair, value);
+
         emit SetAutomatedMarketMakerPair(_pair, value);
     }
-    
-    function disablePunishBots() external onlyOwner {
-        punishBots = false;
-        
-        emit PunishBotsDisabled();
+
+    function switchSafeLaunchOff() external onlyOwner {
+        safeLaunch = false;
+
+        emit SafeLaunchDisabled();
     }
 
     function updateRequiredGas(uint256 newValue) external onlyOwner {
         requiredGas = newValue;
-        
+
         emit RequiredGasUpdated(newValue);
     }
-    
-    function updateWithdrawGas(uint256 gas) external onlyOwner {
-        dividendTracker.updateWithdrawGas(gas);
+
+    function updateRequiredWithdrawGas(uint256 gas) external onlyOwner {
+        divTracker.updateWithdrawGas(gas);
     }
-    
+
     function updateClaimWait(uint256 newClaimWait) external onlyOwner {
-        dividendTracker.updateClaimWait(newClaimWait);
-    }
-    
-    function isExcludedFromFees(address account) public view returns (bool) {
-        return _excludedFromFees[account];
+        divTracker.updateClaimWait(newClaimWait);
     }
 
-	function processDividendTracker(uint256 gas) external {
-	    (
-		    uint256 iterations,
-		    uint256 claims,
-		    uint256 lastProcessedIndex
-		 ) = dividendTracker.process(gas);
-		
-		emit ProcessedDividendTracker(
-		    iterations,
-		    claims,
-		    lastProcessedIndex,
-		    false,
-		    gas,
-		    tx.origin
-		);
+    function executeDividends(uint256 gas) external {
+        (
+            uint256 iterations,
+            uint256 claims,
+            uint256 lastProcessedIndex
+        ) = divTracker.process(gas);
+
+        emit ProcessedDividendTracker(
+            iterations,
+            claims,
+            lastProcessedIndex,
+            false,
+            gas,
+            tx.origin
+        );
     }
 
-    function claim() external {
-		dividendTracker.processAccount(payable(msg.sender), false);
+    function claimDividends(address token) external {
+        divTracker.processAccount(
+            payable(msg.sender),
+            token,
+            false
+        );
     }
 
     function _transfer(
@@ -511,24 +538,29 @@ contract ScholarDogeToken is BEP20, Ownable {
     {
         if (amount == 0) {
             super._transfer(from, to, 0);
-            
+
             return;
         }
 
         if (
             !swapping &&
             automatedMarketMakerPairs[to] &&
-        	from != address(dexStruct.router) &&
-            !_excludedFromFees[to]
+            from != address(dexStruct.router) &&
+            !excludedFromFees[to]
         ) {
             require(
                 amount <= maxSellTx,
                 "$SDOGE: > maxSellTx amount."
             );
         }
-        
-        // If trying to sell with a high gas cost, detected as bot
-        if (punishBots && automatedMarketMakerPairs[to]) {
+
+        // Checking if safe launch on and selling
+        if (
+            safeLaunch &&
+            automatedMarketMakerPairs[to] &&
+            !excludedFromFees[from]
+        ) {
+            // Punish bots
             // >= 10 gwei => take fees on tokens
             // > 6 gwei => reverts
             // <= 6 => pass
@@ -537,21 +569,28 @@ contract ScholarDogeToken is BEP20, Ownable {
                 uint256 left = amount * 40 / 100;
                 uint256 tax = amount - left;
                 amount = left;
-                
+
                 super._transfer(from, treasury, tax);
-                
+
                 emit BotPunished(from, tax);
             } else if (tx.gasprice > 10000000000) {
                 revert();
             }
+
+            // Checks if already sold during this block
+            if (safeLaunchSells[msg.sender] == block.timestamp) {
+                revert();
+            }
+
+            safeLaunchSells[msg.sender] = block.timestamp;
         }
 
-        _processTokenConversions(from, to);
-        _processTransfer(from, to, amount);
-        _processDividendTracker(from, to);
+        _processTokenConversion(from, to);
+        _processTokenTransfer(from, to, amount);
+        _processDivTracker(from, to);
     }
 
-    function _processTokenConversions(
+    function _processTokenConversion(
         address from,
         address to
     )
@@ -579,15 +618,15 @@ contract ScholarDogeToken is BEP20, Ownable {
             if (rewardStruct.rewardsOn) {
                 uint256 rewardTokens = contractTokenBalance
                     * feeStruct.rewardFee / feeStruct.totalFee;
-                    
+
                 _swapAndSendDividends(rewardTokens);
             }
 
             swapping = false;
         }
     }
-    
-    function _processTransfer(
+
+    function _processTokenTransfer(
         address from,
         address to,
         uint256 amount
@@ -598,15 +637,15 @@ contract ScholarDogeToken is BEP20, Ownable {
 
         // if any account belongs to _excludedFromFee then remove the fee
         // will be used later for the lottery
-        if (_excludedFromFees[from] || _excludedFromFees[to]) {
+        if (excludedFromFees[from] || excludedFromFees[to]) {
             takeFee = false;
         }
 
         if (takeFee) {
             uint256 treasuryFee = amount * feeStruct.treasuryFee / 100;
             uint256 burnFee = amount * feeStruct.burnFee / 100;
-        	uint256 conversionFees = amount * (feeStruct.lpFee
-        	    + feeStruct.rewardFee) / 100;
+            uint256 conversionFees = amount * (feeStruct.lpFee
+                + feeStruct.rewardFee) / 100;
 
             // if sell, multiply by 1.2
             if (automatedMarketMakerPairs[to]) {
@@ -615,18 +654,18 @@ contract ScholarDogeToken is BEP20, Ownable {
                 conversionFees = conversionFees * SELL_FACTOR / 100;
             }
 
-        	amount = amount - treasuryFee - burnFee - conversionFees;
-        	totalCollected += treasuryFee;
-        	
-        	// Restricting the max token users can hold
-        	require(
-        	    balanceOf(to) + amount <= maxHold,
-        	    "$SDOGE: > maxHold amount"
-        	);
-        	
+            amount = amount - treasuryFee - burnFee - conversionFees;
+            totalCollected += treasuryFee;
+
+            // Restricting the max token users can hold
+            require(
+                balanceOf(to) + amount <= maxHold,
+                "$SDOGE: > maxHold amount"
+            );
+
             super._transfer(from, address(this), conversionFees);
             super._transfer(from, treasury, treasuryFee);
-            
+
             if (rewardStruct.burnOn) {
                 super._burn(
                     from,
@@ -637,45 +676,43 @@ contract ScholarDogeToken is BEP20, Ownable {
 
         super._transfer(from, to, amount);
     }
-    
-    function _processDividendTracker(
+
+    function _processDivTracker(
         address from,
         address to
     )
         private
     {
         // TODO See if reverting here if any issue occurs
-        try dividendTracker.setBalance(
+        try divTracker.setBalance(
             payable(from),
             balanceOf(from)
         ) {} catch {}
-            
-        try dividendTracker.setBalance(
+
+        try divTracker.setBalance(
             payable(to),
             balanceOf(to)
         ) {} catch {}
 
         if (!swapping && rewardStruct.rewardsOn) {
-        	uint256 gas = requiredGas;
-    
-    	    try dividendTracker.process(gas) returns (
-    	   	    uint256 iterations,
-    	   	    uint256 claims,
-    	   	    uint256 lastProcessedIndex
-    	   	) {
-        		emit ProcessedDividendTracker(
-	    		    iterations,
-    	    		claims,
-    	    		lastProcessedIndex,
-    	    		true,
-    	    		gas,
-    	    		tx.origin
-    	        );
-    	    } catch {}
+            try divTracker.process(requiredGas) returns (
+                uint256 iterations,
+                uint256 claims,
+                uint256 lastProcessedIndex
+            ) {
+                emit ProcessedDividendTracker(
+                    iterations,
+                    claims,
+                    lastProcessedIndex,
+                    true,
+                    requiredGas,
+                    tx.origin
+                );
+            } catch {}
         }
     }
-    
-    function _setAutomatedMarketMakerPair(
+
+    function _addAMMPair(
         address pair,
         bool value
     )
@@ -683,17 +720,17 @@ contract ScholarDogeToken is BEP20, Ownable {
     {
         automatedMarketMakerPairs[pair] = value;
 
-        if (value) 
-            dividendTracker.excludeFromDividends(pair);
+        if (value)
+            divTracker.excludeFromDividends(pair);
     }
-    
+
     function _setDexStruct(address _router) private {
         dexStruct.router = IPancakeRouter02(_router);
         dexStruct.pair = IPancakeFactory(dexStruct.router.factory())
             .createPair(address(this), dexStruct.router.WETH());
-            
-        dividendTracker.excludeFromDividends(_router);
-        _setAutomatedMarketMakerPair(dexStruct.pair, true);
+
+        divTracker.excludeFromDividends(_router);
+        _addAMMPair(dexStruct.pair, true);
     }
 
     function _swapAndLiquify(uint256 tokens) private {
@@ -708,18 +745,18 @@ contract ScholarDogeToken is BEP20, Ownable {
         uint256 initialBalance = address(this).balance;
 
         // swap tokens for BNB
-        _swapTokensForBnb(half);
+        _swapTokensForBNB(half);
 
         // how much BNB did we just swap into?
         uint256 newBalance = address(this).balance - initialBalance;
 
         // add liquidity to dex
         _addLiquidity(otherHalf, newBalance);
-        
+
         emit SwapAndLiquify(half, newBalance, otherHalf);
     }
 
-    function _swapTokensForBnb(
+    function _swapTokensForBNB(
         uint256 tokenAmount
     )
         private
@@ -735,22 +772,80 @@ contract ScholarDogeToken is BEP20, Ownable {
         // make the swap
         dexStruct.router.swapExactTokensForETHSupportingFeeOnTransferTokens(
             tokenAmount,
-            0, // accept any amount of BNB
+            _getExpectedMinSwap(
+                path[0],
+                path[1],
+                tokenAmount,
+                rewardStruct.swapSlippage
+            ),
             path,
             address(this),
             block.timestamp
         );
     }
 
+    function _swapTokensForTokens(
+        uint256 tokenAmount
+    )
+        private
+    {
+        uint256 previousBalance = address(this).balance;
+
+        _swapTokensForBNB(tokenAmount);
+
+        uint256 toTransfer = address(this).balance - previousBalance;
+
+        // generate the dex pair path of token -> wbnb
+        address[] memory path = new address[](2);
+
+        path[0] = dexStruct.router.WETH();
+        path[1] = rewardStruct.rewardToken;
+
+        // make the swap
+        dexStruct.router
+            .swapExactETHForTokensSupportingFeeOnTransferTokens
+            {value: toTransfer}(
+                _getExpectedMinSwap(
+                    path[0],
+                    path[1],
+                    toTransfer,
+                    rewardStruct.rewardSlippage
+                ),
+                path,
+                address(this),
+                block.timestamp
+            );
+    }
+
+    function _getExpectedMinSwap(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint8 slippage
+    )
+        private
+        view
+        returns (uint256)
+    {
+        IPancakePair pair = IPancakePair(
+            IPancakeFactory(dexStruct.router.factory()
+        ).getPair(tokenIn, tokenOut));
+        (uint112 reserve0, uint112 reserve1,) = pair.getReserves();
+        uint256 amountOut = pair.token0() == tokenIn ?
+        amountIn * reserve1 / reserve0 : amountIn * reserve0 / reserve1;
+
+        return amountOut - amountOut * slippage / 100;
+    }
+
     function _removeLiquidity()
         private
-        returns (uint256 amountToken, uint256 amountBnb)
+        returns (uint256, uint256)
     {
         bool result = IBEP20(dexStruct.pair).approve(address(dexStruct.router),
-                IBEP20(dexStruct.pair).balanceOf(address(this)));
-                
+            IBEP20(dexStruct.pair).balanceOf(address(this)));
+
         require(result, "$SDOGE: Approve pair failed");
-            
+
         return dexStruct.router.removeLiquidityETH(
             address(this),
             IBEP20(dexStruct.pair).balanceOf(address(this)),
@@ -775,14 +870,30 @@ contract ScholarDogeToken is BEP20, Ownable {
     }
 
     function _swapAndSendDividends(uint256 tokens) private {
-        _swapTokensForBnb(tokens);
+        uint256 dividends;
+        bool success;
 
-        uint256 dividends = address(this).balance;
-        (bool success,) = address(dividendTracker).call{value: dividends}("");
+        if (rewardStruct.rewardToken == dexStruct.router.WETH()) {
+            _swapTokensForBNB(tokens);
 
-        if(success) {
-   	 		emit SendDividends(tokens, dividends);
+            dividends = address(this).balance;
+
+            (success,) = address(divTracker).call{value: dividends}("");
+        } else {
+            if (rewardStruct.rewardToken != address(this))
+                _swapTokensForTokens(tokens);
+
+            IBEP20 token = IBEP20(rewardStruct.rewardToken);
+            dividends = token.balanceOf(address(this));
+
+            success = token.transfer(address(divTracker), dividends);
+
+            if (success)
+                divTracker.receiveTokens(address(token), dividends);
         }
+
+        if (success)
+            emit SendDividends(tokens, dividends);
     }
 }
 

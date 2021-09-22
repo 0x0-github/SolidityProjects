@@ -15,18 +15,18 @@ contract ScholarDogeDividendTracker is Ownable {
     
     address public immutable sdoge;
 
-    mapping(address => uint256) private magnifiedDividendPerShare;
+    mapping(address => uint256) public magnifiedDividendPerShare;
     mapping(address => mapping(address => int256))
-        private magnifiedDividendCorrections;
+        public magnifiedDividendCorrections;
 
     mapping(address => mapping(address => uint256)) private withdrawnDividends;
     mapping(address => uint256) public totalDividendsDistributed;
     
     // Used gas for withdraw, can be updated as it may change
-    uint256 internal withdrawGas = 6000;
+    uint256 private withdrawGas = 6000;
     
     // use by default 250,000 gas to process auto-claiming dividends
-    uint32 internal claimGas = 250000;
+    uint32 private claimGas = 250000;
 
     EnumerableMap.Map private tokenHoldersMap;
     uint256 public lastProcessedIndex;
@@ -194,25 +194,27 @@ contract ScholarDogeDividendTracker is Ownable {
         view
         returns (uint256)
     {
-        return (
-            _token == IScholarDogeToken(sdoge).getRewardToken() &&
+        uint256 balance = (
+            _token == IScholarDogeToken(sdoge).rewardToken() &&
             !excludedFromDividends[_owner]
-        ) ? uint256(
-            int256(magnifiedDividendPerShare[_token] * IBEP20(sdoge).balanceOf(_owner))
-            + magnifiedDividendCorrections[_token][_owner]
-        ) / MAGNITUDE : magnifiedDividendPerShare[_token]
-            * tokenHoldersMap.get(_owner, _token) / MAGNITUDE;
+        ) ? IBEP20(sdoge).balanceOf(_owner) : tokenHoldersMap.get(_owner, _token);
+
+        return uint256(int256(magnifiedDividendPerShare[_token] * balance)
+            + magnifiedDividendCorrections[_token][_owner]) / MAGNITUDE;
+    }
+    
+    function getTokenHolderMap(address _owner, address _token) public view returns (uint256) {
+        return tokenHoldersMap.get(_owner, _token);
     }
 
-    function updateShareAndTransfer(
+    function updateShare(
         address from,
         address to,
         uint256 amount
     )
         external
-        onlyOwner
     {
-        address rewardToken = IScholarDogeToken(sdoge).getRewardToken();
+        address rewardToken = IScholarDogeToken(sdoge).rewardToken();
         int256 _magCorrection = int256(
             magnifiedDividendPerShare[rewardToken] * amount);
         
@@ -241,7 +243,7 @@ contract ScholarDogeDividendTracker is Ownable {
         uint256 iterations = 0;
         uint256 _lastProcessedIndex = lastProcessedIndex;
         address rewardToken
-            = IScholarDogeToken(sdoge).getRewardToken();
+            = IScholarDogeToken(sdoge).rewardToken();
 
         while (gasUsed < maxGas && iterations < numberOfTokenHolders) {
             _lastProcessedIndex++;
@@ -294,7 +296,7 @@ contract ScholarDogeDividendTracker is Ownable {
         excludedFromDividends[account] = true;
         
         address rewardToken
-            = IScholarDogeToken(sdoge).getRewardToken();
+            = IScholarDogeToken(sdoge).rewardToken();
 
         magnifiedDividendCorrections[rewardToken][account]
             += int256(magnifiedDividendPerShare[rewardToken]
@@ -325,7 +327,7 @@ contract ScholarDogeDividendTracker is Ownable {
         }
     }
 
-    function _withdrawDividendOfUser(address payable _user, address _token)
+    function _withdrawDividendOfUser(address _user, address _token)
         internal
         returns (uint256)
     {
@@ -361,7 +363,7 @@ contract ScholarDogeDividendTracker is Ownable {
     }
     
     function _processAccount(
-        address payable account,
+        address account,
         address token
     )
         private
@@ -380,15 +382,13 @@ contract ScholarDogeDividendTracker is Ownable {
         return false;
     }
     
-    function _processBalance(address payable account) private {
+    function _processBalance(address account) private {
         uint256 balance = IBEP20(sdoge).balanceOf(account);
         address rewardToken
-            = IScholarDogeToken(sdoge).getRewardToken();
+            = IScholarDogeToken(sdoge).rewardToken();
         
         if (balance > minTokensForDividends) {
             tokenHoldersMap.set(account, rewardToken, balance);
-            
-            _processAccount(account, rewardToken);
         } else {
             tokenHoldersMap.remove(account, rewardToken);
         }

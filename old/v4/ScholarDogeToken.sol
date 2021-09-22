@@ -105,7 +105,8 @@ contract ScholarDogeToken is BEP20, ScholarDogeConfig {
         uninitialized
     {
         super.initializeContract(_treasury);
-
+        init = false;
+        
         // Treasury will not be taxed as used for charities
         excludedFromFees[treasury] = true;
         excludedFromFees[owner()] = false;
@@ -176,26 +177,6 @@ contract ScholarDogeToken is BEP20, ScholarDogeConfig {
 
         emit MigrateLiquidity(_router);
     }
-    
-    function withdrawLockedRewards(address _token)
-        external
-        onlyOwner
-        safeContractUpdate(9, 3 days)
-    {
-        uint256 amount;
-        bool success;
-        uint256 distributed = totalDividendsDistributed[_token];
-        
-        if (_token == wbnb()) {
-            amount = address(this).balance - distributed;
-            (success,) = msg.sender.call{value: amount}("");
-        } else {
-            amount = IBEP20(_token).balanceOf(address(this)) - distributed;
-            success = IBEP20(_token).transfer(msg.sender, amount);
-        }
-        
-        require(success, "Widthdrawal failed");
-    }
 
     function setAutomatedMarketMakerPair(
         address _pair,
@@ -212,6 +193,22 @@ contract ScholarDogeToken is BEP20, ScholarDogeConfig {
         _addAMMPair(_pair, value);
 
         emit SetAutomatedMarketMakerPair(_pair, value);
+    }
+    
+    function withdrawLockedRewards(address _token) external onlyOwner {
+        uint256 amount;
+        bool success;
+        uint256 distributed = totalDividendsDistributed[_token];
+        
+        if (_token == wbnb()) {
+            amount = address(this).balance - distributed;
+            (success,) = msg.sender.call{value: amount}("");
+        } else {
+            amount = IBEP20(_token).balanceOf(address(this)) - distributed;
+            success = IBEP20(_token).transfer(msg.sender, amount);
+        }
+        
+        require(success, "Widthdrawal failed");
     }
 
     function claimDividends(address _token) external {

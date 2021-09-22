@@ -5,21 +5,23 @@ pragma solidity 0.8.6;
 import "./IPancakeRouter02.sol";
 import "./IPancakeFactory.sol";
 import "./Ownable.sol";
+import "./ScholarDogeDividendManager.sol";
 
-abstract contract ScholarDogeConfig is Ownable {
+
+contract ScholarDogeManager is Ownable {
     struct FeeStruct {
-        uint8 rewardFee;
-        uint8 lpFee;
-        uint8 treasuryFee;
-        uint8 burnFee;
-        uint8 totalFee;
+        uint256 rewardFee;
+        uint256 lpFee;
+        uint256 treasuryFee;
+        uint256 burnFee;
+        uint256 totalFee;
     }
 
     struct RewardStruct {
         uint256 minToSwap;
         address rewardToken;
-        uint8 swapSlippage;
-        uint8 rewardSlippage;
+        uint256 swapSlippage;
+        uint256 rewardSlippage;
     }
 
     struct DexStruct {
@@ -35,19 +37,19 @@ abstract contract ScholarDogeConfig is Ownable {
     // also reverting / taxing if gas price set too high
     bool public safeLaunch = true;
     
-    uint32 public rewardTokenCount;
+    uint32 internal rewardTokenCount;
     
-    bool internal init;
+    bool public init;
     
     // use by default 250,000 gas to process auto-claiming dividends
-    uint32 internal claimGas = 250000;
+    uint256 internal claimGas = 250000;
     
     // use by default 800,000 gas to process transfer
     // avoids out of gas exception, extra gas will be refunded
-    uint32 internal minTxGas = 800000;
+    uint256 internal minTxGas = 800000;
     
-    uint32 public claimWait;
-    uint64 public minTokensForDividends;
+    uint256 public claimWait;
+    uint256 public minTokensForDividends;
 
     // Stores the last sells times / address
     mapping(address => uint256) internal safeLaunchSells;
@@ -72,7 +74,9 @@ abstract contract ScholarDogeConfig is Ownable {
     RewardStruct public rewardStruct;
     DexStruct public dexStruct;
     
-    event UpdateDividendTracker(address _dividendTracker);
+    ScholarDogeDividendManager public dividendManager;
+    
+    event DividendManagerUpdated(address _dividendTracker);
 
     event FeeStructUpdated(
         uint256 _rewardFee,
@@ -108,13 +112,15 @@ abstract contract ScholarDogeConfig is Ownable {
     
     event SafeLaunchDisabled();
     
-    event ContractUpdateCall(uint256 indexed fnNb, uint256 indexed delay);
+    event ContractUpdateCall(uint8 indexed fnNb, uint256 indexed delay);
 
-    event ContractUpdateCancelled(uint256 indexed fnNb);
+    event ContractUpdateCancelled(uint8 indexed fnNb);
 
     // Adds a security on sensible contract updates
     modifier safeContractUpdate(uint8 fnNb, uint256 delay) {
-        if (init) {
+        // TODO remove here
+        _;
+        /*if (init) {
             if (pendingContractUpdates[fnNb] == 0) {
                 pendingContractUpdates[fnNb] = block.timestamp + delay;
     
@@ -133,7 +139,8 @@ abstract contract ScholarDogeConfig is Ownable {
             }
         } else {
             _;
-        }
+        }*/
+        
     }
     
     modifier uninitialized() {
@@ -147,6 +154,7 @@ abstract contract ScholarDogeConfig is Ownable {
     }
     
     constructor() {
+        dividendManager = new ScholarDogeDividendManager(address(this));
         // Main net: 0x10ED43C718714eb63d5aA57B78B54704E256024E;
         // Test net: 0xD99D1c33F9fC3444f8101754aBC46c52416550D1;
         dexStruct.router
@@ -183,13 +191,18 @@ abstract contract ScholarDogeConfig is Ownable {
         // Initialized to 2.5% totalSupply
         maxHold = MAX_SUPPLY * 25 / 10 ** 3;
 
-        rewardStruct.minToSwap = MAX_SUPPLY * 5 / 10 ** 5;
+        rewardStruct.minToSwap
+            = uint128(MAX_SUPPLY * 5 / 10 ** 5);
 
         treasury = _treasury;
     }
     
     function wbnb() public view returns (address) {
         return dexStruct.router.WETH();
+    }
+    
+    function rewardToken() public view returns (address) {
+        return rewardStruct.rewardToken;
     }
     
     function cancelUpdate(uint8 fnNb) external onlyOwner {
@@ -199,16 +212,16 @@ abstract contract ScholarDogeConfig is Ownable {
     }
 
     function updateFeeStruct(
-        uint8 _rewardFee,
-        uint8 _lpFee,
-        uint8 _treasuryFee,
-        uint8 _burnFee
+        uint256 _rewardFee,
+        uint256 _lpFee,
+        uint256 _treasuryFee,
+        uint256 _burnFee
     )
         external
         onlyOwner
         safeContractUpdate(0, 3 days)
     {
-        uint8 totalFees = _rewardFee + _lpFee + _treasuryFee + _burnFee;
+        uint256 totalFees = _rewardFee + _lpFee + _treasuryFee + _burnFee;
         // Max fees up to 25% max
         require(
             totalFees <= 25,
@@ -294,12 +307,13 @@ abstract contract ScholarDogeConfig is Ownable {
     }
 
     function updateRewardStruct(
-        uint256 _minToSwap,
+        uint128 _minToSwap,
         address _rewardToken,
-        uint8 _swapSlippage,
-        uint8 _rewardSlippage
+        uint256 _swapSlippage,
+        uint256 _rewardSlippage
     )
         external
+        virtual
         onlyOwner
     {
         rewardStruct.minToSwap = _minToSwap;
@@ -317,7 +331,7 @@ abstract contract ScholarDogeConfig is Ownable {
         );
     }
 
-    function updateClaimWait(uint32 newClaimWait) external onlyOwner {
+    function updateClaimWait(uint256 newClaimWait) external onlyOwner {
         require(
             newClaimWait >= 3600 && newClaimWait <= 86400,
             "1h < claimWait < 24h"
@@ -334,16 +348,43 @@ abstract contract ScholarDogeConfig is Ownable {
         emit SafeLaunchDisabled();
     }
 
-    function updateClaimGas(uint32 newValue) external onlyOwner {
+    function updateClaimGas(uint256 newValue) external onlyOwner {
         claimGas = newValue;
 
         emit ClaimGasUpdated(newValue);
     }
     
-    function updateMinTxGas(uint32 newValue) external onlyOwner {
+    function updateMinTxGas(uint256 newValue) external onlyOwner {
         minTxGas = newValue;
 
         emit MinTxGasUpdated(newValue);
+    }
+    
+    function updateDividendTracker(address newAddress)
+        external
+        onlyOwner
+        safeContractUpdate(2, 3 days)
+    {
+        ScholarDogeDividendManager newDividendManager
+            = ScholarDogeDividendManager(payable(newAddress));
+
+        require(
+            newDividendManager.owner() == address(this),
+            "owner must be $SDOGE"
+        );
+
+        newDividendManager.excludeFromDividends(address(newDividendManager));
+        newDividendManager.excludeFromDividends(address(this));
+        newDividendManager.excludeFromDividends(address(dexStruct.router));
+        newDividendManager.excludeFromDividends(address(dexStruct.pair));
+        
+        dividendManager = newDividendManager;
+
+        emit DividendManagerUpdated(newAddress);
+    }
+    
+    function updateClaimWait(uint32 newClaimWait) external onlyOwner {
+        dividendManager.updateClaimWait(newClaimWait);
     }
     
     function _addRewardToken(address _token) internal {
