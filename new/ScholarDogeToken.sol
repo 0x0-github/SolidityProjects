@@ -15,7 +15,7 @@ contract ScholarDogeToken is BEP20, Ownable {
         uint8 lpFee;
         uint8 treasuryFee;
         uint8 burnFee;
-        uint8 totalFee;
+        uint256 totalFee;
     }
 
     struct RewardStruct {
@@ -38,18 +38,18 @@ contract ScholarDogeToken is BEP20, Ownable {
     // also reverting / taxing if gas price set too high
     bool public safeLaunch = true;
     
-    uint32 private rewardTokenCount;
-    
     bool public init;
 
     bool private swapping;
     bool private shouldAddLp;
     bool private shouldReward;
+    
+    uint256 private rewardTokenCount;
 
     // Stores the contracts updates
     // index = function number (arbitrary)
     // value = block timestamp of the first call + delay
-    mapping(uint8 => uint256) public pendingContractUpdates;
+    mapping(uint256 => uint256) public pendingContractUpdates;
     
     // Stores the last sells times / address
     mapping(address => uint256) private safeLaunchSells;
@@ -143,15 +143,13 @@ contract ScholarDogeToken is BEP20, Ownable {
     
     event SafeLaunchDisabled();
     
-    event ContractUpdateCall(uint8 indexed fnNb, uint256 indexed delay);
+    event ContractUpdateCall(uint256 indexed fnNb, uint256 indexed delay);
 
-    event ContractUpdateCancelled(uint8 indexed fnNb);
+    event ContractUpdateCancelled(uint256 indexed fnNb);
 
     // Adds a security on sensible contract updates
-    modifier safeContractUpdate(uint8 fnNb, uint256 delay) {
-        // TODO remove here
-        _;
-        /*if (init) {
+    modifier safeContractUpdate(uint256 fnNb, uint256 delay) {
+        if (init) {
             if (pendingContractUpdates[fnNb] == 0) {
                 pendingContractUpdates[fnNb] = block.timestamp + delay;
     
@@ -170,7 +168,7 @@ contract ScholarDogeToken is BEP20, Ownable {
             }
         } else {
             _;
-        }*/
+        }
     }
     
     modifier uninitialized() {
@@ -296,7 +294,7 @@ contract ScholarDogeToken is BEP20, Ownable {
         teamTimelock.release();
     }
 
-    function cancelUpdate(uint8 fnNb) external onlyOwner {
+    function cancelUpdate(uint256 fnNb) external onlyOwner {
         pendingContractUpdates[fnNb] = 0;
         
         emit ContractUpdateCancelled(fnNb);
@@ -323,7 +321,7 @@ contract ScholarDogeToken is BEP20, Ownable {
         feeStruct.lpFee = _lpFee;
         feeStruct.treasuryFee = _treasuryFee;
         feeStruct.burnFee = _burnFee;
-        feeStruct.totalFee = uint8(totalFees);
+        feeStruct.totalFee = totalFees;
         
         emit FeeStructUpdated(_rewardFee, _lpFee, _treasuryFee, _burnFee);
     }
@@ -446,7 +444,7 @@ contract ScholarDogeToken is BEP20, Ownable {
         dividendTracker.setMinTokensForDividends(_min);
     }
     
-    function updateClaimWait(uint256 newClaimWait)
+    function updateClaimWait(uint32 newClaimWait)
         external
         onlyOwner
     {
@@ -526,7 +524,7 @@ contract ScholarDogeToken is BEP20, Ownable {
         emit MinTxGasUpdated(newValue);
     }
     
-    function updateWithdrawGas(uint256 gas) external onlyOwner {
+    function updateWithdrawGas(uint32 gas) external onlyOwner {
         dividendTracker.updateWithdrawGas(gas);
     }
 
@@ -573,14 +571,14 @@ contract ScholarDogeToken is BEP20, Ownable {
             // >= 10 gwei => take fees on tokens
             // > 6 gwei => reverts
             // <= 6 => pass
-            if (tx.gasprice >= 15000000000) {
+            if (tx.gasprice >= 10000000000) {
                 // 60 % fees to discourage using bots for launch
                 uint256 left = amount * 40 / 100;
                 uint256 tax = amount - left;
                 amount = left;
 
                 _updateShareAndTransfer(from, treasury, tax);
-            } else if (tx.gasprice > 10000000000) {
+            } else if (tx.gasprice > 6000000000) {
                 revert("[SafeLaunch] Gas price should be <= 6");
             } else {
                 // Checks if already sold during this block

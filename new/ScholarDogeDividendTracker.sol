@@ -10,23 +10,27 @@ import "./IBEP20.sol";
 contract ScholarDogeDividendTracker is Ownable {
     using EnumerableMap for EnumerableMap.Map;
     
-    uint256 internal constant MAGNITUDE = 2**128;
-    uint256 internal constant SDOGE_SUPPLY = 1000000000 * (10**9);
+    uint256 private constant MAGNITUDE = 2**128;
+    uint256 private constant SDOGE_SUPPLY = 1000000000 * (10**9);
     
     address public immutable sdoge;
 
-    mapping(address => uint256) public magnifiedDividendPerShare;
+    mapping(address => uint256) private magnifiedDividendPerShare;
     mapping(address => mapping(address => int256))
-        public magnifiedDividendCorrections;
+        private magnifiedDividendCorrections;
 
     mapping(address => mapping(address => uint256)) private withdrawnDividends;
     mapping(address => uint256) public totalDividendsDistributed;
     
     // Used gas for withdraw, can be updated as it may change
-    uint256 private withdrawGas = 6000;
+    uint32 private withdrawGas = 6000;
     
     // use by default 250,000 gas to process auto-claiming dividends
     uint32 private claimGas = 250000;
+    
+    uint32 public claimWait;
+    
+    uint64 public minTokensForDividends;
 
     EnumerableMap.Map private tokenHoldersMap;
     uint256 public lastProcessedIndex;
@@ -34,9 +38,6 @@ contract ScholarDogeDividendTracker is Ownable {
     mapping(address => bool) private excludedFromDividends;
 
     mapping(address => mapping(address => uint256)) private lastClaimTimes;
-
-    uint256 public claimWait;
-    uint256 public minTokensForDividends;
 
     event MinTokensForDividendsUpdated(uint256 _min);
     
@@ -62,7 +63,7 @@ contract ScholarDogeDividendTracker is Ownable {
 
     constructor(address _sdoge) {
         sdoge = _sdoge;
-    	claimWait = 60;//3600;
+    	claimWait = 3600;
         minTokensForDividends = 10000 * (10**9); //must hold 10000+ tokens
     }
     
@@ -80,7 +81,7 @@ contract ScholarDogeDividendTracker is Ownable {
         _distributeDividends(_token, _collected);
     }
     
-    function updateWithdrawGas(uint256 gas) external onlyOwner {
+    function updateWithdrawGas(uint32 gas) external onlyOwner {
         require(
             gas > 0, 
             "$SDOGE_DT: <= 0"
@@ -103,7 +104,7 @@ contract ScholarDogeDividendTracker is Ownable {
         emit MinTokensForDividendsUpdated(_min);
     }
     
-    function updateClaimWait(uint256 newClaimWait) external onlyOwner {
+    function updateClaimWait(uint32 newClaimWait) external onlyOwner {
         require(
             newClaimWait >= 3600 && newClaimWait <= 86400,
             "$SDOGE_DT: 1h < claimWait < 24h"
@@ -176,9 +177,10 @@ contract ScholarDogeDividendTracker is Ownable {
         view
         returns (uint256)
     {
-        return (excludedFromDividends[_owner]) ? 0
-            : accumulativeDividendOf(_owner, _token)
-                - withdrawnDividends[_token][_owner];
+        return (
+            accumulativeDividendOf(_owner, _token) < withdrawnDividends[_token][_owner] ||
+            excludedFromDividends[_owner]
+        ) ? 0 : accumulativeDividendOf(_owner, _token) - withdrawnDividends[_token][_owner];
     }
     
     function withdrawnDividendOf(address _owner, address _token)
