@@ -215,6 +215,7 @@ contract ScholarDogeDividendTracker is Ownable {
         uint256 amount
     )
         external
+        onlyOwner
     {
         address rewardToken = IScholarDogeToken(sdoge).rewardToken();
         int256 _magCorrection = int256(
@@ -318,7 +319,7 @@ contract ScholarDogeDividendTracker is Ownable {
         address _token,
         uint256 _amount
     )
-        internal
+        private
     {
         if (_amount > 0) {
             magnifiedDividendPerShare[_token] += 
@@ -330,7 +331,7 @@ contract ScholarDogeDividendTracker is Ownable {
     }
 
     function _withdrawDividendOfUser(address _user, address _token)
-        internal
+        private
         returns (uint256)
     {
         uint256 _withdrawableDividend = withdrawableDividendOf(_user, _token);

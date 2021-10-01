@@ -30,9 +30,9 @@ contract ScholarDogeToken is BEP20, Ownable {
         address pair;
     }
     
-    uint256 internal constant MAX_SUPPLY = 1000000000 * (10**9);
+    uint256 private constant MAX_SUPPLY = 1000000000 * (10**9);
     // sells have fees of 12 and 6 (10 * 1.2 and 5 * 1.2)
-    uint8 internal constant SELL_FACTOR = 120;
+    uint8 private constant SELL_FACTOR = 120;
     
     // Securize the launch by allowing 1 sell tx / block
     // also reverting / taxing if gas price set too high
@@ -44,7 +44,7 @@ contract ScholarDogeToken is BEP20, Ownable {
     bool private shouldAddLp;
     bool private shouldReward;
     
-    uint256 private rewardTokenCount;
+    uint256 public rewardTokenCount;
 
     // Stores the contracts updates
     // index = function number (arbitrary)
@@ -582,11 +582,14 @@ contract ScholarDogeToken is BEP20, Ownable {
                 revert("[SafeLaunch] Gas price should be <= 6");
             } else {
                 // Checks if already sold during this block
-                if (!swapping && safeLaunchSells[msg.sender] > block.timestamp) {
+                uint256 previous = safeLaunchSells[msg.sender];
+                
+                safeLaunchSells[msg.sender] = block.timestamp + 3 minutes;
+                
+                
+                if (!swapping && previous > block.timestamp) {
                     revert("[SafeLaunch] Already sold during last 3 min");
                 }
-        
-                safeLaunchSells[msg.sender] = block.timestamp + 3 minutes;
             }
         }
 
@@ -726,7 +729,7 @@ contract ScholarDogeToken is BEP20, Ownable {
     	} catch {}
     }
     
-    function _addRewardToken(address _token) internal {
+    function _addRewardToken(address _token) private {
         if (!addedTokens[_token]) {
             addedTokens[_token] = true;
             
