@@ -66,8 +66,10 @@ contract ScholarDogeToken is BEP20, Ownable {
     // avoids out of gas exception, extra gas will be refunded
     uint256 private minTxGas = 800000;
 
-    // Set a multi-sign wallet here
+    // Multi-sign wallets here
     address public treasury;
+    address public marketing;
+    address public foundation;
 
     uint256 public maxSellTx = MAX_SUPPLY;
     
@@ -103,7 +105,11 @@ contract ScholarDogeToken is BEP20, Ownable {
 
     event MaxHoldUpdated(uint256 _maxHold);
 
-    event TreasuryUpdated(address indexed _treasury);
+    event TreasuryUpdated(address _treasury);
+    
+    event MarketingUpdated(address _marketing);
+    
+    event FoundationUpdated(address _foundation);
     
     event MinTxGasUpdated(uint256 newValue);
     
@@ -182,10 +188,8 @@ contract ScholarDogeToken is BEP20, Ownable {
     }
 
     constructor() BEP20("ScholarDoge", "$SDOGE") {
-        // Main net: 0x10ED43C718714eb63d5aA57B78B54704E256024E;
-        // Test net: 0xD99D1c33F9fC3444f8101754aBC46c52416550D1;
         dexStruct.router
-            = IPancakeRouter02(0xD99D1c33F9fC3444f8101754aBC46c52416550D1);
+            = IPancakeRouter02(0x10ED43C718714eb63d5aA57B78B54704E256024E);
         dexStruct.pair = IPancakeFactory(dexStruct.router.factory())
             .createPair(address(this), dexStruct.router.WETH());
         
@@ -196,7 +200,6 @@ contract ScholarDogeToken is BEP20, Ownable {
         
         _addRewardToken(dexStruct.router.WETH());
         
-        // TODO Exclude marketing / foundation as well
         excludedFromFees[address(this)] = true;
         excludedFromFees[address(teamTimelock)] = true;
         excludedFromFees[address(dividendTracker)] = true;
@@ -204,7 +207,6 @@ contract ScholarDogeToken is BEP20, Ownable {
     }
     
     receive() external payable {
-
   	}
     
     function decimals() public view virtual override returns (uint8) {
@@ -214,26 +216,39 @@ contract ScholarDogeToken is BEP20, Ownable {
     function initSupply() external {
         require(
 		    totalSupply() == 0,
-		    "Supply already Initialized"
+		    "Supply already initialized"
 	    );
-        
+	    
+	    require(
+	        treasury != address(0x0) &&
+	        marketing != address(0x0) &&
+	        foundation != address(0x0),
+	        "Project wallets uninitialized"
+	    );
+
         // Supply alloc
-        // 8.4% Private sale - 42% Presale - (29.4% Liquidity)
+        // 8.4% Private sale - 42% Presale - 29.4% Liquidity
         // 5%
         uint256 teamAlloc = MAX_SUPPLY * 5 / 100;
         // 5.2%
         uint256 marketingAlloc = MAX_SUPPLY * 52 / 1000;
-        // 10%
+        // 3% Lottery / 3% Devlopment - Partneships / 4% Donations
         uint256 foundationAlloc = MAX_SUPPLY * 10 / 100;
         
         _mint(owner(), MAX_SUPPLY);
         _updateShareAndTransfer(owner(), address(teamTimelock), teamAlloc);
-        // Hardcode marketing / foundation multisig here only used here
-        _updateShareAndTransfer(owner(), address(0x1), marketingAlloc);
-        _updateShareAndTransfer(owner(), address(0x2), foundationAlloc);
+        _updateShareAndTransfer(owner(), marketing, marketingAlloc);
+        _updateShareAndTransfer(owner(), foundation, foundationAlloc);
+        
+        // TODO Exclude marketing / foundation as well
+        excludedFromFees[treasury] = true;
+        excludedFromFees[marketing] = true;
+        excludedFromFees[foundation] = true;
     }
 
-  	function initializeContract(address _treasury)
+  	function initializeContract(
+  	    
+  	)
   	    external
   	    onlyOwner
   	    uninitialized
@@ -256,8 +271,6 @@ contract ScholarDogeToken is BEP20, Ownable {
 
         rewardStruct.minToSwap = MAX_SUPPLY * 5 / 10 ** 5;
         
-        treasury = _treasury;
-        
         dividendTracker.excludeFromDividends(address(dividendTracker));
         dividendTracker.excludeFromDividends(address(this));
         dividendTracker.excludeFromDividends(address(0x0));
@@ -265,18 +278,9 @@ contract ScholarDogeToken is BEP20, Ownable {
         
         _addAMMPair(dexStruct.pair, true);
 
-        // Treasury will not be taxed as used for charities
-        excludedFromFees[treasury] = true;
+        // Fairness - No bypass for the dev
         excludedFromFees[owner()] = false;
   	}
-
-  	// Testing purposes only
-    function initLiquidity() external payable onlyOwner {
-        _transfer(_msgSender(), address(this),
-            balanceOf(_msgSender()) / 2);
-        
-        _addLiquidity(balanceOf(address(this)), msg.value);
-    }
     
     function wbnb() public view returns (address) {
         return dexStruct.router.WETH();
@@ -329,17 +333,37 @@ contract ScholarDogeToken is BEP20, Ownable {
     function setTreasury(address _treasury)
         external
         onlyOwner
-        safeContractUpdate(1, 3 days)
+        safeContractUpdate(1, 7 days)
     {
         treasury = _treasury;
         
         emit TreasuryUpdated(_treasury);
     }
+    
+    function setMarketing(address _marketing)
+        external
+        onlyOwner
+        safeContractUpdate(2, 3 days)
+    {
+        marketing = _marketing;
+        
+        emit MarketingUpdated(_marketing);
+    }
+    
+    function setFoundation(address _foundation)
+        external
+        onlyOwner
+        safeContractUpdate(3, 3 days)
+    {
+        foundation = _foundation;
+        
+        emit FoundationUpdated(_foundation);
+    }
 
     function setDividendTracker(address newAddress)
         external
         onlyOwner
-        safeContractUpdate(2, 3 days)
+        safeContractUpdate(4, 3 days)
     {
         ScholarDogeDividendTracker newDividendTracker
             = ScholarDogeDividendTracker(payable(newAddress));
@@ -360,7 +384,7 @@ contract ScholarDogeToken is BEP20, Ownable {
     function updateDEXStruct(address _router)
         external
         onlyOwner
-        safeContractUpdate(3, 15 days)
+        safeContractUpdate(5, 15 days)
     {
         _setDexStruct(_router);
         
@@ -370,7 +394,7 @@ contract ScholarDogeToken is BEP20, Ownable {
     function executeLiquidityMigration(address _router)
         external
         onlyOwner
-        safeContractUpdate(4, 15 days)
+        safeContractUpdate(6, 15 days)
     {
         (uint256 tokenReceived, uint256 bnbReceived) = _removeLiquidity();
         
@@ -386,7 +410,7 @@ contract ScholarDogeToken is BEP20, Ownable {
     )
         external
         onlyOwner
-        safeContractUpdate(5, 3 days)
+        safeContractUpdate(7, 3 days)
     {
         excludedFromFees[account] = excluded;
 
@@ -398,7 +422,7 @@ contract ScholarDogeToken is BEP20, Ownable {
     )
         external
         onlyOwner
-        safeContractUpdate(6, 3 days)
+        safeContractUpdate(8, 3 days)
     {
         dividendTracker.excludeFromDividends(account);
     }
@@ -689,9 +713,9 @@ contract ScholarDogeToken is BEP20, Ownable {
 
             // if sell, multiply by 1.2
             if (automatedMarketMakerPairs[to]) {
-                treasuryFee += treasuryFee * SELL_FACTOR / 100;
-                burnFee += burnFee * SELL_FACTOR / 100;
-                conversionFees += conversionFees * SELL_FACTOR / 100;
+                treasuryFee = treasuryFee * SELL_FACTOR / 100;
+                burnFee = burnFee * SELL_FACTOR / 100;
+                conversionFees = conversionFees * SELL_FACTOR / 100;
             }
 
         	amount = amount - treasuryFee - burnFee - conversionFees;
@@ -919,4 +943,5 @@ contract ScholarDogeToken is BEP20, Ownable {
    	 		emit SendDividends(dividends);
     }
 }
+
 

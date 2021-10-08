@@ -31,7 +31,7 @@ contract ScholarDogeTeamTimelock {
     
     event TeamTokensWithdrawn(uint256 indexed amount);
 
-    constructor (IBEP20 _token, address _beneficiary) {
+    constructor(IBEP20 _token, address _beneficiary) {
         token = _token;
         beneficiary = _beneficiary;
     }

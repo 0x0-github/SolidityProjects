@@ -4,9 +4,9 @@ pragma solidity 0.8.6;
 
 import "./IBEP20.sol";
 
-// Multisig wallet to keep treasury funds SAFU
+// Multisig wallet to keep funds SAFU
 // Will require owners / 2 + 1 confirmations to execute
-contract ScholarDogeTreasury {
+contract ScholarDogeMultisig {
     struct Transaction {
         address to;
         uint256 value;
@@ -46,6 +46,7 @@ contract ScholarDogeTreasury {
 
     modifier onlyOwner() {
         require(isOwner[msg.sender], "Not owner");
+        
         _;
     }
 
@@ -54,6 +55,7 @@ contract ScholarDogeTreasury {
             _txIndex < transactions.length,
             "Tx does not exist"
         );
+        
         _;
     }
 
@@ -62,6 +64,7 @@ contract ScholarDogeTreasury {
             !transactions[_txIndex].executed,
             "Tx already executed"
         );
+        
         _;
     }
 
@@ -70,6 +73,7 @@ contract ScholarDogeTreasury {
             !isConfirmed[_txIndex][msg.sender],
             "Tx already confirmed"
         );
+        
         _;
     }
 
@@ -77,7 +81,8 @@ contract ScholarDogeTreasury {
         string memory _name,
         address[] memory _owners,
         address _sdoge
-    ) {
+    )
+    {
         require(
             _owners.length > 0,
             "Owners required"
@@ -250,3 +255,4 @@ contract ScholarDogeTreasury {
         );
     }
 }
+
